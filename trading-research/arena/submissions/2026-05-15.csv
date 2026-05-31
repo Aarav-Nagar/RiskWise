@@ -1,0 +1,56 @@
+trade_date,signal_date,agent,ticker,weight,description
+2026-05-15,2026-05-14,BlendedAIAgent,QQQ,0.2,Rule-locked blend of saved fundamental and technical scores.
+2026-05-15,2026-05-14,BlendedAIAgent,AVGO,0.2,Rule-locked blend of saved fundamental and technical scores.
+2026-05-15,2026-05-14,BlendedAIAgent,NVDA,0.2,Rule-locked blend of saved fundamental and technical scores.
+2026-05-15,2026-05-14,BlendedAIAgent,LLY,0.2,Rule-locked blend of saved fundamental and technical scores.
+2026-05-15,2026-05-14,BlendedAIAgent,GOOGL,0.2,Rule-locked blend of saved fundamental and technical scores.
+2026-05-15,2026-05-14,CumulativeOptionsContextAgent,AMZN,0.291054,Cumulative context model with options sentiment when option chains are available.
+2026-05-15,2026-05-14,CumulativeOptionsContextAgent,AAPL,0.251721,Cumulative context model with options sentiment when option chains are available.
+2026-05-15,2026-05-14,CumulativeOptionsContextAgent,NVDA,0.150532,Cumulative context model with options sentiment when option chains are available.
+2026-05-15,2026-05-14,CumulativeOptionsContextAgent,GOOGL,0.144816,Cumulative context model with options sentiment when option chains are available.
+2026-05-15,2026-05-14,CumulativeOptionsContextAgent,AMD,0.061877,Cumulative context model with options sentiment when option chains are available.
+2026-05-15,2026-05-14,DiversifiedContextAgent,AMZN,0.17,Non-tech/non-health-care sector specialist using cross-sector context.
+2026-05-15,2026-05-14,DiversifiedContextAgent,PG,0.17,Non-tech/non-health-care sector specialist using cross-sector context.
+2026-05-15,2026-05-14,DiversifiedContextAgent,COST,0.17,Non-tech/non-health-care sector specialist using cross-sector context.
+2026-05-15,2026-05-14,DiversifiedContextAgent,MCD,0.17,Non-tech/non-health-care sector specialist using cross-sector context.
+2026-05-15,2026-05-14,DiversifiedContextAgent,WMT,0.17,Non-tech/non-health-care sector specialist using cross-sector context.
+2026-05-15,2026-05-14,FundamentalQualityAgent,NVDA,0.2,"Uses latest saved fundamental quality ranks, fallback to momentum."
+2026-05-15,2026-05-14,FundamentalQualityAgent,PLTR,0.2,"Uses latest saved fundamental quality ranks, fallback to momentum."
+2026-05-15,2026-05-14,FundamentalQualityAgent,GOOGL,0.2,"Uses latest saved fundamental quality ranks, fallback to momentum."
+2026-05-15,2026-05-14,FundamentalQualityAgent,META,0.2,"Uses latest saved fundamental quality ranks, fallback to momentum."
+2026-05-15,2026-05-14,FundamentalQualityAgent,AMD,0.2,"Uses latest saved fundamental quality ranks, fallback to momentum."
+2026-05-15,2026-05-14,HealthCareContextAgent,PFE,0.17,"Health-care specialist using fundamentals, catalysts, earnings proximity, and risk context."
+2026-05-15,2026-05-14,HealthCareContextAgent,JNJ,0.17,"Health-care specialist using fundamentals, catalysts, earnings proximity, and risk context."
+2026-05-15,2026-05-14,HealthCareContextAgent,MRK,0.17,"Health-care specialist using fundamentals, catalysts, earnings proximity, and risk context."
+2026-05-15,2026-05-14,HealthCareContextAgent,UNH,0.17,"Health-care specialist using fundamentals, catalysts, earnings proximity, and risk context."
+2026-05-15,2026-05-14,HealthCareContextAgent,ABBV,0.17,"Health-care specialist using fundamentals, catalysts, earnings proximity, and risk context."
+2026-05-15,2026-05-14,ITContextAgent,NVDA,0.18,"Information-technology specialist using catalysts, sector rotation, liquidity, and technical context."
+2026-05-15,2026-05-14,ITContextAgent,AAPL,0.18,"Information-technology specialist using catalysts, sector rotation, liquidity, and technical context."
+2026-05-15,2026-05-14,ITContextAgent,AMD,0.18,"Information-technology specialist using catalysts, sector rotation, liquidity, and technical context."
+2026-05-15,2026-05-14,ITContextAgent,GOOGL,0.18,"Information-technology specialist using catalysts, sector rotation, liquidity, and technical context."
+2026-05-15,2026-05-14,ITContextAgent,AVGO,0.18,"Information-technology specialist using catalysts, sector rotation, liquidity, and technical context."
+2026-05-15,2026-05-14,MeanReversionAgent,PFE,0.17,Oversold bounce portfolio with trend filter.
+2026-05-15,2026-05-14,MeanReversionAgent,META,0.17,Oversold bounce portfolio with trend filter.
+2026-05-15,2026-05-14,MeanReversionAgent,BAC,0.17,Oversold bounce portfolio with trend filter.
+2026-05-15,2026-05-14,MeanReversionAgent,PEP,0.17,Oversold bounce portfolio with trend filter.
+2026-05-15,2026-05-14,MeanReversionAgent,PG,0.17,Oversold bounce portfolio with trend filter.
+2026-05-15,2026-05-14,MetaConsensusAgent,QQQ,0.334831,"Ensemble of sub-agent votes, factor ranks, technical regime, and volatility risk."
+2026-05-15,2026-05-14,MetaConsensusAgent,AMZN,0.253741,"Ensemble of sub-agent votes, factor ranks, technical regime, and volatility risk."
+2026-05-15,2026-05-14,MetaConsensusAgent,NVDA,0.131234,"Ensemble of sub-agent votes, factor ranks, technical regime, and volatility risk."
+2026-05-15,2026-05-14,MetaConsensusAgent,GOOGL,0.12625,"Ensemble of sub-agent votes, factor ranks, technical regime, and volatility risk."
+2026-05-15,2026-05-14,MetaConsensusAgent,AMD,0.053944,"Ensemble of sub-agent votes, factor ranks, technical regime, and volatility risk."
+2026-05-15,2026-05-14,MomentumAgent,AMD,0.2,Trend and relative-strength technical portfolio.
+2026-05-15,2026-05-14,MomentumAgent,UNH,0.2,Trend and relative-strength technical portfolio.
+2026-05-15,2026-05-14,MomentumAgent,GOOGL,0.2,Trend and relative-strength technical portfolio.
+2026-05-15,2026-05-14,MomentumAgent,NVDA,0.2,Trend and relative-strength technical portfolio.
+2026-05-15,2026-05-14,MomentumAgent,AVGO,0.2,Trend and relative-strength technical portfolio.
+2026-05-15,2026-05-14,RandomAgent,PLTR,0.334298,Seeded random long-only portfolio sanity check.
+2026-05-15,2026-05-14,RandomAgent,COST,0.291356,Seeded random long-only portfolio sanity check.
+2026-05-15,2026-05-14,RandomAgent,NKE,0.161643,Seeded random long-only portfolio sanity check.
+2026-05-15,2026-05-14,RandomAgent,JNJ,0.120143,Seeded random long-only portfolio sanity check.
+2026-05-15,2026-05-14,RandomAgent,MRK,0.09256,Seeded random long-only portfolio sanity check.
+2026-05-15,2026-05-14,RiskManagedAgent,QQQ,0.4,Volatility-scaled blend with partial cash during higher risk.
+2026-05-15,2026-05-14,RiskManagedAgent,NVDA,0.158151,Volatility-scaled blend with partial cash during higher risk.
+2026-05-15,2026-05-14,RiskManagedAgent,AVGO,0.153052,Volatility-scaled blend with partial cash during higher risk.
+2026-05-15,2026-05-14,RiskManagedAgent,LLY,0.135289,Volatility-scaled blend with partial cash during higher risk.
+2026-05-15,2026-05-14,SPY_Benchmark,SPY,1.0,Passive 100% SPY benchmark.

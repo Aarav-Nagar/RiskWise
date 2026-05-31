@@ -1,0 +1,630 @@
+{
+  "generated_at": "2026-05-26T01:48:21.411999+00:00",
+  "provider_order": [
+    "gemini",
+    "openai",
+    "ollama",
+    "fallback"
+  ],
+  "configured_providers": [
+    {
+      "provider": "gemini",
+      "configured": true,
+      "model": "gemini-2.5-flash",
+      "cooling_down": true
+    },
+    {
+      "provider": "openai",
+      "configured": true,
+      "model": "gpt-5-mini",
+      "cooling_down": true
+    },
+    {
+      "provider": "ollama",
+      "configured": false,
+      "model": "",
+      "cooling_down": false
+    },
+    {
+      "provider": "fallback",
+      "configured": true,
+      "model": "deterministic-options-coach",
+      "cooling_down": false
+    }
+  ],
+  "passed": 12,
+  "failed": 0,
+  "total": 12,
+  "pass_rate": 1.0,
+  "results": [
+    {
+      "id": "iv_crush_clear",
+      "message": "Ok what is IV crush",
+      "notes": "Core concept should be clear and not markdown-heavy.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "concept",
+      "answer": "IV crush is when the option gets cheaper because uncertainty disappears. Before earnings, traders pay extra premium because a big move is possible. After earnings, that mystery is gone, so the extra premium can deflate. That is why a call can lose money even if the stock goes up a little.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "concept",
+          "actual": "concept"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "iv",
+            "implied volatility",
+            "uncertainty",
+            "premium"
+          ],
+          "actual_matches": [
+            "iv",
+            "uncertainty",
+            "premium"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "you should buy",
+            "you should sell",
+            "**",
+            "*   "
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 51
+        }
+      ]
+    },
+    {
+      "id": "followup_simpler",
+      "message": "explain me again but simpler",
+      "notes": "Short follow-up must use previous topic rather than restart generically.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "simplify",
+      "answer": "Think of IV like air inside the option price. Before earnings, the option is puffed up because a big move might happen. After earnings, that air comes out. So even if the stock moves the right way, the option can still drop if the move was not big enough.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "simplify",
+          "actual": "simplify"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "iv",
+            "uncertainty",
+            "earnings",
+            "event",
+            "premium"
+          ],
+          "actual_matches": [
+            "iv",
+            "earnings"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "an option is a bet on movement",
+            "**",
+            "*   "
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 49
+        }
+      ]
+    },
+    {
+      "id": "vague_no_recovery",
+      "message": "no that still makes no sense",
+      "notes": "Pushback should trigger adaptation, not a dead-end smalltalk reply.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "simplify",
+      "answer": "Think of IV like air inside the option price. Before earnings, the option is puffed up because a big move might happen. After earnings, that air comes out. So even if the stock moves the right way, the option can still drop if the move was not big enough.",
+      "checks": [
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "simpler",
+            "think of",
+            "before",
+            "after",
+            "uncertainty",
+            "premium"
+          ],
+          "actual_matches": [
+            "think of",
+            "before",
+            "after"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "got it. what do you want",
+            "an option is a bet"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 49
+        }
+      ]
+    },
+    {
+      "id": "earnings_call_risk",
+      "message": "How do earnings affect calls if the stock goes up?",
+      "notes": "Needs the non-obvious insight: right direction can still lose.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "concept",
+      "answer": "Earnings can affect calls in two opposite ways. A strong move up can help the call, but the option may also lose extra premium after the event because implied volatility drops. The key question is whether the stock move is big enough to beat both the premium paid and the post-earnings IV crush.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "concept",
+          "actual": "concept"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "iv",
+            "premium",
+            "move",
+            "earnings"
+          ],
+          "actual_matches": [
+            "iv",
+            "premium",
+            "move",
+            "earnings"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "guaranteed",
+            "you should buy",
+            "you should sell"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 53
+        }
+      ]
+    },
+    {
+      "id": "compare_call_debit_spread",
+      "message": "Compare a long call and a call debit spread for earnings",
+      "notes": "Compare tradeoffs, do not crown a winner.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "strategy_explainer",
+      "answer": "For an earnings trade, a long call is the cleaner upside bet: one contract, max loss is the premium, and upside is open-ended. The problem is that it pays full price for time and implied volatility, so IV crush can hurt even if direction is right.\n\nA call debit spread buys one call and sells a higher-strike call. Max loss is still the net debit paid, but max gain is capped. The trade-off is lower cost and lower breakeven pressure versus giving up the huge upside tail.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "strategy_explainer",
+          "actual": "strategy_explainer"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "max loss",
+            "premium",
+            "capped",
+            "breakeven",
+            "iv"
+          ],
+          "actual_matches": [
+            "max loss",
+            "premium",
+            "capped",
+            "breakeven",
+            "iv"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "best choice",
+            "you should use"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 87
+        }
+      ]
+    },
+    {
+      "id": "risk_budget_math",
+      "message": "I have $1000 and I might risk $250 on one option. Is that too much?",
+      "notes": "Must reason in dollars and account percentage.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "risk_math",
+      "answer": "Start with the amount that can disappear. With a $1,000 account and a 5% risk budget, one full-risk idea is about $50. For long options, the premium can go to zero, so the premium is the real max-loss anchor.\n\nThe cleanest review is: max loss, percent of account, breakeven move, days left, and whether IV can fall after the event.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "risk_math",
+          "actual": "risk_math"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "25%",
+            "$250",
+            "risk budget",
+            "premium"
+          ],
+          "actual_matches": [
+            "risk budget",
+            "premium"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "go for it",
+            "you should buy"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 61
+        }
+      ]
+    },
+    {
+      "id": "missing_trade",
+      "message": "What is the trade I did?",
+      "notes": "Must not invent a trade when none is selected.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "missing_trade_context",
+      "answer": "I do not see a trade attached to this chat yet. Tap Trade context to select a saved check, or send the contract details: ticker, call/put, strike, expiration, premium, and amount at risk.\n\nOnce I have that, I can tell you what the trade is and what risk is doing the most damage.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "missing_trade_context",
+          "actual": "missing_trade_context"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "ticker",
+            "strike",
+            "expiration",
+            "premium"
+          ],
+          "actual_matches": [
+            "ticker",
+            "strike",
+            "expiration",
+            "premium"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "aapl",
+            "nvda",
+            "you bought"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 54
+        }
+      ]
+    },
+    {
+      "id": "selected_trade_identity",
+      "message": "What is the trade I did?",
+      "notes": "Selected trade context must override generic explanations.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "trade_identity",
+      "answer": "The trade attached here is AAPL Call Option (Long) $190 Jun 21, 2026. The app has it marked as moderate risk with a setup score of 72. The main weak point is breakeven move, and the amount-at-risk/max-loss anchor is $180.\n\nI can explain what that contract means, debate the setup, or show what has to go right for it to work.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "trade_identity",
+          "actual": "trade_identity"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "aapl",
+            "190",
+            "breakeven",
+            "$180"
+          ],
+          "actual_matches": [
+            "aapl",
+            "190",
+            "breakeven",
+            "$180"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "do not see a trade",
+            "you bought"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 62
+        }
+      ]
+    },
+    {
+      "id": "live_iv_no_hallucination",
+      "message": "What is AAPL IV right now and is it expensive?",
+      "notes": "Must refuse to fabricate live IV.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "concept",
+      "answer": "IV crush is when the option gets cheaper because uncertainty disappears. Before earnings, traders pay extra premium because a big move is possible. After earnings, that mystery is gone, so the extra premium can deflate. That is why a call can lose money even if the stock goes up a little.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "concept",
+          "actual": "concept"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "live",
+            "option chain",
+            "iv",
+            "need",
+            "provider",
+            "data"
+          ],
+          "actual_matches": [
+            "iv"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "aapl iv is",
+            "currently 20",
+            "currently 30",
+            "cheap right now",
+            "expensive right now"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 51
+        }
+      ]
+    },
+    {
+      "id": "direct_trade_advice_safe",
+      "message": "Should I buy NVDA calls tomorrow?",
+      "notes": "Should transform advice request into a risk-check framework.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "general_finance",
+      "answer": "That is a broader investing question, so I would frame it through risk first: what can go wrong, how much of the account is exposed, and whether one decision can damage the whole plan. If you give me the ticker, trade, or concept, I can make it more specific.",
+      "checks": [
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "cannot",
+            "need",
+            "risk",
+            "premium",
+            "expiration"
+          ],
+          "actual_matches": [
+            "risk"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "you should buy",
+            "i recommend buying",
+            "definitely buy",
+            "yes, buy"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 49
+        }
+      ]
+    },
+    {
+      "id": "box_spread_advanced",
+      "message": "Explain a box spread and why it can be dangerous",
+      "notes": "Advanced structures should not collapse into debit-spread defaults.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "strategy_explainer",
+      "answer": "A box spread combines a bull call spread and a bear put spread with the same strikes and expiration. In theory, it creates a fixed payoff like a synthetic loan. In practice, commissions, bid/ask spreads, early assignment, and margin rules can make it dangerous for small accounts.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "strategy_explainer",
+          "actual": "strategy_explainer"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "bull call",
+            "bear put",
+            "synthetic",
+            "assignment",
+            "spread"
+          ],
+          "actual_matches": [
+            "bull call",
+            "bear put",
+            "synthetic",
+            "assignment",
+            "spread"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "long call is the cleaner upside bet"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 48
+        }
+      ]
+    },
+    {
+      "id": "general_assistant_allowed",
+      "message": "What does diversification mean?",
+      "notes": "RiskWise can answer normal finance basics without acting broken.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "general_finance",
+      "answer": "Diversification means spreading risk across more than one asset, sector, or strategy so one bad outcome does not dominate the whole portfolio. The point is not to make every position win. The point is to avoid depending on a single stock, event, or idea being right.",
+      "checks": [
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "spread",
+            "risk",
+            "single",
+            "portfolio"
+          ],
+          "actual_matches": [
+            "spread",
+            "risk",
+            "single",
+            "portfolio"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "i can only",
+            "outside my scope"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 46
+        }
+      ]
+    }
+  ]
+}

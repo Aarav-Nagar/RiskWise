@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  mobile-demo:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/mobile-demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/mobile-demo/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run export:web
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r backend/api/requirements-dev.txt
+      - run: python -m compileall backend/api
+      - run: python -m pytest backend/api/tests
+      - run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "backend")
+          from fastapi.testclient import TestClient
+          from api.app import app
+          client = TestClient(app)
+          assert client.get("/health").status_code == 200
+          payload = {
+              "ticker": "AAPL",
+              "trade_type": "Call Option (Long)",
+              "strike": 190,
+              "expiration": "Jun 21, 2026",
+              "amount_at_risk": 250,
+              "timeframe": "1-2 Weeks",
+              "account_size": 10000,
+          }
+          response = client.post("/trade-check", json=payload)
+          assert response.status_code == 200
+          assert "agent_docket" in response.json()
+          PY

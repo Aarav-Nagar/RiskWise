@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "RiskWise",
+    "slug": "riskwise",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "riskwise",
+    "userInterfaceStyle": "light",
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.aaravnagar.riskwise"
+    },
+    "android": {
+      "package": "com.aaravnagar.riskwise"
+    }
+  }
+}

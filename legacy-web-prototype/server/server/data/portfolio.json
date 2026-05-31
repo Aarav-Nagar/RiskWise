@@ -1,0 +1,23 @@
+[
+  {
+    "id": "95660848-7b5f-4378-bf62-0f5bcbd48a2e",
+    "ticker": "AAPL",
+    "shares": 5,
+    "buyPrice": 180,
+    "createdAt": "2026-04-23T23:03:28.061Z"
+  },
+  {
+    "id": "01213258-1a81-475e-9991-57a23fe00c71",
+    "ticker": "TEAM",
+    "shares": 0,
+    "buyPrice": 0,
+    "createdAt": "2026-04-24T01:17:56.602Z"
+  },
+  {
+    "id": "27cae7ce-371a-4a1b-acfc-acf3981914a7",
+    "ticker": "TSLA",
+    "shares": 1,
+    "buyPrice": 400,
+    "createdAt": "2026-04-24T01:18:12.721Z"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "name": "quant-market-app",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "concurrently \"pnpm --dir server dev\" \"pnpm --dir client dev\"",
+    "dev:server": "pnpm --dir server dev",
+    "dev:client": "pnpm --dir client dev",
+    "build": "pnpm --dir client build",
+    "start": "node server/server.js"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

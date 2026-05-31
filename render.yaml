@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: riskwise-api
+    env: docker
+    plan: starter
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_STORAGE_PROVIDER
+        value: mongo
+      - key: MONGODB_DATABASE
+        value: finance_app
+      - key: LLM_PROVIDER_ORDER
+        value: gemini,openai,fallback
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: GEMINI_API_VERSION
+        value: v1beta
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
+      - key: MARKET_DATA_PROVIDER
+        value: disabled

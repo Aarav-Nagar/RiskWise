@@ -1,0 +1,138 @@
+{
+  "created_at": "2026-05-16T19:18:32",
+  "trade_date": "2026-05-15",
+  "signal_date": "2026-05-14",
+  "starting_capital": 100.0,
+  "entry_rule": "Buy at target session open.",
+  "exit_rule": "Liquidate at target session close.",
+  "transaction_cost_rate": 0.001,
+  "agents": [
+    {
+      "agent": "SPY_Benchmark",
+      "description": "Passive 100% SPY benchmark.",
+      "weights": {
+        "SPY": 1.0
+      }
+    },
+    {
+      "agent": "RandomAgent",
+      "description": "Seeded random long-only portfolio sanity check.",
+      "weights": {
+        "PLTR": 0.334298,
+        "COST": 0.291356,
+        "NKE": 0.161643,
+        "JNJ": 0.120143,
+        "MRK": 0.09256
+      }
+    },
+    {
+      "agent": "MomentumAgent",
+      "description": "Trend and relative-strength technical portfolio.",
+      "weights": {
+        "AMD": 0.2,
+        "UNH": 0.2,
+        "GOOGL": 0.2,
+        "NVDA": 0.2,
+        "AVGO": 0.2
+      }
+    },
+    {
+      "agent": "MeanReversionAgent",
+      "description": "Oversold bounce portfolio with trend filter.",
+      "weights": {
+        "PFE": 0.17,
+        "META": 0.17,
+        "BAC": 0.17,
+        "PEP": 0.17,
+        "PG": 0.17
+      }
+    },
+    {
+      "agent": "FundamentalQualityAgent",
+      "description": "Uses latest saved fundamental quality ranks, fallback to momentum.",
+      "weights": {
+        "NVDA": 0.2,
+        "PLTR": 0.2,
+        "GOOGL": 0.2,
+        "META": 0.2,
+        "AMD": 0.2
+      }
+    },
+    {
+      "agent": "BlendedAIAgent",
+      "description": "Rule-locked blend of saved fundamental and technical scores.",
+      "weights": {
+        "QQQ": 0.2,
+        "AVGO": 0.2,
+        "NVDA": 0.2,
+        "LLY": 0.2,
+        "GOOGL": 0.2
+      }
+    },
+    {
+      "agent": "RiskManagedAgent",
+      "description": "Volatility-scaled blend with partial cash during higher risk.",
+      "weights": {
+        "QQQ": 0.4,
+        "NVDA": 0.158151,
+        "AVGO": 0.153052,
+        "LLY": 0.135289
+      }
+    },
+    {
+      "agent": "MetaConsensusAgent",
+      "description": "Ensemble of sub-agent votes, factor ranks, technical regime, and volatility risk.",
+      "weights": {
+        "QQQ": 0.334831,
+        "AMZN": 0.253741,
+        "NVDA": 0.131234,
+        "GOOGL": 0.12625,
+        "AMD": 0.053944
+      }
+    },
+    {
+      "agent": "ITContextAgent",
+      "description": "Information-technology specialist using catalysts, sector rotation, liquidity, and technical context.",
+      "weights": {
+        "NVDA": 0.18,
+        "AAPL": 0.18,
+        "AMD": 0.18,
+        "GOOGL": 0.18,
+        "AVGO": 0.18
+      }
+    },
+    {
+      "agent": "HealthCareContextAgent",
+      "description": "Health-care specialist using fundamentals, catalysts, earnings proximity, and risk context.",
+      "weights": {
+        "PFE": 0.17,
+        "JNJ": 0.17,
+        "MRK": 0.17,
+        "UNH": 0.17,
+        "ABBV": 0.17
+      }
+    },
+    {
+      "agent": "DiversifiedContextAgent",
+      "description": "Non-tech/non-health-care sector specialist using cross-sector context.",
+      "weights": {
+        "AMZN": 0.17,
+        "PG": 0.17,
+        "COST": 0.17,
+        "MCD": 0.17,
+        "WMT": 0.17
+      }
+    },
+    {
+      "agent": "CumulativeOptionsContextAgent",
+      "description": "Cumulative context model with options sentiment when option chains are available.",
+      "weights": {
+        "AMZN": 0.291054,
+        "AAPL": 0.251721,
+        "NVDA": 0.150532,
+        "GOOGL": 0.144816,
+        "AMD": 0.061877
+      }
+    }
+  ]
+}

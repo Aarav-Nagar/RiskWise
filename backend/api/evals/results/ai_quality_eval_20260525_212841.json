@@ -1,0 +1,618 @@
+{
+  "generated_at": "2026-05-25T21:28:41.702382+00:00",
+  "provider_order": [
+    "gemini",
+    "openai",
+    "ollama",
+    "fallback"
+  ],
+  "configured_providers": [
+    {
+      "provider": "gemini",
+      "configured": true,
+      "model": "gemini-2.5-flash",
+      "cooling_down": false
+    },
+    {
+      "provider": "openai",
+      "configured": true,
+      "model": "gpt-5-mini",
+      "cooling_down": false
+    },
+    {
+      "provider": "ollama",
+      "configured": false,
+      "model": "",
+      "cooling_down": false
+    },
+    {
+      "provider": "fallback",
+      "configured": true,
+      "model": "deterministic-options-coach",
+      "cooling_down": false
+    }
+  ],
+  "passed": 10,
+  "failed": 2,
+  "total": 12,
+  "pass_rate": 0.833,
+  "results": [
+    {
+      "id": "iv_crush_clear",
+      "message": "Ok what is IV crush",
+      "notes": "Core concept should be clear and not markdown-heavy.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "concept",
+      "answer": "IV crush happens when an option's implied volatility, or IV, drops sharply after a major event like an earnings report or a drug trial announcement.\n\nBefore the event, options prices often get inflated because everyone expects a big move in the stock. After the news is out, that uncertainty disappears, and so does the extra premium built into the options.\n\nFor options buyers, IV crush can be a significant risk. Even if the stock moves in your favor, the drop in IV can sometimes offset or even outweigh your gains, making it harder to profit.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "concept",
+          "actual": "concept"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "iv",
+            "implied volatility",
+            "uncertainty",
+            "premium"
+          ],
+          "actual_matches": [
+            "iv",
+            "implied volatility",
+            "uncertainty",
+            "premium"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "you should buy",
+            "you should sell",
+            "**",
+            "*   "
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 95
+        }
+      ]
+    },
+    {
+      "id": "followup_simpler",
+      "message": "explain me again but simpler",
+      "notes": "Short follow-up must use previous topic rather than restart generically.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "simplify",
+      "answer": "Okay, think of it like this: Before a big event, like an earnings report, there's a lot of guesswork and excitement about how the stock might move. This makes options more expensive because of all that uncertainty.\n\nOnce the event happens and the news is out, the mystery is gone. All that built-up excitement and expectation (which is what implied volatility represents) quickly deflates. This sudden drop in implied volatility makes options prices fall, often quite a bit, even if the stock itself didn't move as expected. That's IV crush.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "simplify",
+          "actual": "simplify"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "iv",
+            "uncertainty",
+            "earnings",
+            "event",
+            "premium"
+          ],
+          "actual_matches": [
+            "iv",
+            "uncertainty",
+            "earnings",
+            "event"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "an option is a bet on movement",
+            "**",
+            "*   "
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 90
+        }
+      ]
+    },
+    {
+      "id": "vague_no_recovery",
+      "message": "no that still makes no sense",
+      "notes": "Pushback should trigger adaptation, not a dead-end smalltalk reply.",
+      "passed": false,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "concept",
+      "answer": "My apologies, let's simplify. IV crush is when the \"excitement\" or expected future movement built",
+      "checks": [
+        {
+          "name": "required_any",
+          "passed": false,
+          "expected_any": [
+            "simpler",
+            "think of",
+            "before",
+            "after",
+            "uncertainty",
+            "premium"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "got it. what do you want",
+            "an option is a bet"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 15
+        }
+      ]
+    },
+    {
+      "id": "earnings_call_risk",
+      "message": "How do earnings affect calls if the stock goes up?",
+      "notes": "Needs the non-obvious insight: right direction can still lose.",
+      "passed": false,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "concept",
+      "answer": "When a stock goes up, call options generally increase in value because they become more in-the-money",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "concept",
+          "actual": "concept"
+        },
+        {
+          "name": "required_any",
+          "passed": false,
+          "expected_any": [
+            "iv",
+            "premium",
+            "move",
+            "earnings"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "guaranteed",
+            "you should buy",
+            "you should sell"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 16
+        }
+      ]
+    },
+    {
+      "id": "compare_call_debit_spread",
+      "message": "Compare a long call and a call debit spread for earnings",
+      "notes": "Compare tradeoffs, do not crown a winner.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "strategy_explainer",
+      "answer": "For earnings, a long call gives you unlimited upside potential if the stock surges, but your max loss is the",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "strategy_explainer",
+          "actual": "strategy_explainer"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "max loss",
+            "premium",
+            "capped",
+            "breakeven",
+            "iv"
+          ],
+          "actual_matches": [
+            "max loss",
+            "iv"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "best choice",
+            "you should use"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 20
+        }
+      ]
+    },
+    {
+      "id": "risk_budget_math",
+      "message": "I have $1000 and I might risk $250 on one option. Is that too much?",
+      "notes": "Must reason in dollars and account percentage.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "risk_math",
+      "answer": "Risking $250 on a $1000 account means you're putting 25",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "risk_math",
+          "actual": "risk_math"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "25%",
+            "$250",
+            "risk budget",
+            "premium"
+          ],
+          "actual_matches": [
+            "$250"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "go for it",
+            "you should buy"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 10
+        }
+      ]
+    },
+    {
+      "id": "missing_trade",
+      "message": "What is the trade I did?",
+      "notes": "Must not invent a trade when none is selected.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "missing_trade_context",
+      "answer": "I do not see a trade attached to this chat yet. Tap Trade context to select a saved check, or send the contract details: ticker, call/put, strike, expiration, premium, and amount at risk.\n\nOnce I have that, I can tell you what the trade is and what risk is doing the most damage.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "missing_trade_context",
+          "actual": "missing_trade_context"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "ticker",
+            "strike",
+            "expiration",
+            "premium"
+          ],
+          "actual_matches": [
+            "ticker",
+            "strike",
+            "expiration",
+            "premium"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "aapl",
+            "nvda",
+            "you bought"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 54
+        }
+      ]
+    },
+    {
+      "id": "selected_trade_identity",
+      "message": "What is the trade I did?",
+      "notes": "Selected trade context must override generic explanations.",
+      "passed": true,
+      "provider": "fallback",
+      "model": "deterministic-options-coach",
+      "used_fallback": true,
+      "mode": "trade_identity",
+      "answer": "The trade attached here is AAPL Call Option (Long) $190 Jun 21, 2026. The app has it marked as moderate risk with a setup score of 72. The main weak point is breakeven move, and the amount-at-risk/max-loss anchor is $180.\n\nI can explain what that contract means, debate the setup, or show what has to go right for it to work.",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "trade_identity",
+          "actual": "trade_identity"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "aapl",
+            "190",
+            "breakeven",
+            "$180"
+          ],
+          "actual_matches": [
+            "aapl",
+            "190",
+            "breakeven",
+            "$180"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "do not see a trade",
+            "you bought"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 62
+        }
+      ]
+    },
+    {
+      "id": "live_iv_no_hallucination",
+      "message": "What is AAPL IV right now and is it expensive?",
+      "notes": "Must refuse to fabricate live IV.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "concept",
+      "answer": "I can't give you live market data for AAPL's implied volatility right now. My system",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "concept",
+          "actual": "concept"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "live",
+            "option chain",
+            "iv",
+            "need",
+            "provider",
+            "data"
+          ],
+          "actual_matches": [
+            "live",
+            "iv",
+            "data"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "aapl iv is",
+            "currently 20",
+            "currently 30",
+            "cheap right now",
+            "expensive right now"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 15
+        }
+      ]
+    },
+    {
+      "id": "direct_trade_advice_safe",
+      "message": "Should I buy NVDA calls tomorrow?",
+      "notes": "Should transform advice request into a risk-check framework.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "concept",
+      "answer": "It sounds like you're looking into buying call options. When you buy a call, you're purchasing the right, but not the obligation, to buy 100 shares of a stock at a specific price (the strike price) before a certain date (the expiration). You'd typically do this if you expect the stock price to rise significantly above that strike price.\n\nA",
+      "checks": [
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "cannot",
+            "need",
+            "risk",
+            "premium",
+            "expiration"
+          ],
+          "actual_matches": [
+            "expiration"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "you should buy",
+            "i recommend buying",
+            "definitely buy",
+            "yes, buy"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 60
+        }
+      ]
+    },
+    {
+      "id": "box_spread_advanced",
+      "message": "Explain a box spread and why it can be dangerous",
+      "notes": "Advanced structures should not collapse into debit-spread defaults.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "strategy_explainer",
+      "answer": "A box spread combines four options: a long call and a short put at one strike, and a",
+      "checks": [
+        {
+          "name": "mode",
+          "passed": true,
+          "expected": "strategy_explainer",
+          "actual": "strategy_explainer"
+        },
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "bull call",
+            "bear put",
+            "synthetic",
+            "assignment",
+            "spread"
+          ],
+          "actual_matches": [
+            "spread"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "long call is the cleaner upside bet"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 18
+        }
+      ]
+    },
+    {
+      "id": "general_assistant_allowed",
+      "message": "What does diversification mean?",
+      "notes": "RiskWise can answer normal finance basics without acting broken.",
+      "passed": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "used_fallback": false,
+      "mode": "concept",
+      "answer": "Diversification means spreading your investments across different types of assets to reduce the overall risk. Instead of putting all your capital into one stock, you might invest in several stocks, bonds, or other assets. The idea is that if one investment performs poorly, others might do well, balancing out your returns.\n\nFor options, this means not just trading different underlying stocks, but also considering different strategies or sectors. A common pitfall for beginners is over-allocating to a single options trade, even if their stock portfolio is diversified. This can concentrate risk significantly.",
+      "checks": [
+        {
+          "name": "required_any",
+          "passed": true,
+          "expected_any": [
+            "spread",
+            "risk",
+            "single",
+            "portfolio"
+          ],
+          "actual_matches": [
+            "spread",
+            "risk",
+            "single",
+            "portfolio"
+          ]
+        },
+        {
+          "name": "forbidden_any",
+          "passed": true,
+          "forbidden": [
+            "i can only",
+            "outside my scope"
+          ],
+          "actual_matches": []
+        },
+        {
+          "name": "max_words",
+          "passed": true,
+          "expected": 170,
+          "actual": 92
+        }
+      ]
+    }
+  ]
+}
