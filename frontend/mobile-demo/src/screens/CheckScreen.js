@@ -2,375 +2,519 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
-import { ConfidenceRing, IntelligenceStrip, MiniLineChart } from "../components/InsightVisuals";
-import { Metric } from "../components/Metric";
-import { ErrorCard, Field, Header, money, PrimaryButton, ScreenScroll, SelectLike, sharedText } from "../components/Shared";
-import { getMarketBundle, getOptionContractContext, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
+import { ErrorCard, Header, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
+import { getMarketBundle, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
-const tradeTypes = ["Call Option (Long)", "Put Option (Long)", "Stock Position (Long)", "Watchlist Only"];
-const timeframes = ["Intraday", "1-3 Days", "1-2 Weeks", "1 Month+"];
-const optionSides = [
-  { label: "Call", value: "call" },
-  { label: "Put", value: "put" }
-];
-const startChoices = [
-  {
-    key: "stock",
-    title: "Stock Idea",
-    text: "I have a stock idea and want to explore it.",
-    icon: "trending-up"
-  },
+const popularSymbols = ["AAPL", "NVDA", "SPY", "MSFT", "QQQ"];
+
+const localSymbols = [
+  ["AAPL", "Apple Inc.", "NASDAQ"],
+  ["NVDA", "NVIDIA Corporation", "NASDAQ"],
+  ["SPY", "SPDR S&P 500 ETF Trust", "NYSE Arca"],
+  ["MSFT", "Microsoft Corporation", "NASDAQ"],
+  ["QQQ", "Invesco QQQ Trust", "NASDAQ"],
+  ["TSLA", "Tesla Inc.", "NASDAQ"],
+  ["AMD", "Advanced Micro Devices Inc.", "NASDAQ"],
+  ["AMZN", "Amazon.com Inc.", "NASDAQ"],
+  ["META", "Meta Platforms Inc.", "NASDAQ"],
+  ["GOOGL", "Alphabet Inc.", "NASDAQ"],
+  ["ACHR", "Archer Aviation Inc.", "NYSE"],
+  ["RKLB", "Rocket Lab USA Inc.", "NASDAQ"],
+  ["SOFI", "SoFi Technologies Inc.", "NASDAQ"],
+  ["HOOD", "Robinhood Markets Inc.", "NASDAQ"],
+  ["PLTR", "Palantir Technologies Inc.", "NASDAQ"],
+  ["RIVN", "Rivian Automotive Inc.", "NASDAQ"],
+  ["COIN", "Coinbase Global Inc.", "NASDAQ"],
+  ["SMCI", "Super Micro Computer Inc.", "NASDAQ"],
+  ["MARA", "MARA Holdings Inc.", "NASDAQ"],
+  ["IONQ", "IonQ Inc.", "NYSE"],
+  ["QBTS", "D-Wave Quantum Inc.", "NYSE"],
+  ["ASTS", "AST SpaceMobile Inc.", "NASDAQ"]
+].map(([symbol, name, exchange]) => ({ symbol, name, exchange, source: "local" }));
+
+const flowChoices = [
   {
     key: "option",
+    accent: palette.green,
+    icon: "document-text-outline",
     title: "Option Contract",
-    text: "I know contract details and want to evaluate it.",
-    icon: "document-text"
+    subtitle: "I know the contract details and want to evaluate it.",
+    body: "Use this when strike, expiration, premium, and size are already known."
+  },
+  {
+    key: "stock",
+    accent: palette.blue,
+    icon: "trending-up-outline",
+    title: "Stock Idea",
+    subtitle: "I have a ticker idea and want to explore option structures.",
+    body: "RiskWise suggests structures first, then moves into contract details."
   },
   {
     key: "screenshot",
+    accent: "#7C3AED",
+    icon: "camera-outline",
     title: "Screenshot",
-    text: "Upload a contract screenshot from a trading platform.",
-    icon: "camera"
+    subtitle: "I have a contract screenshot from a trading platform.",
+    body: "Mock extraction reads the image, asks you to confirm, then runs the same check."
   }
 ];
+
+const directions = [
+  ["bullish", "Bullish", "I expect the price to go up", "thumbs-up-outline"],
+  ["bearish", "Bearish", "I expect the price to go down", "trending-down-outline"],
+  ["neutral", "Neutral", "I expect sideways / no big move", "remove-circle-outline"],
+  ["not_sure", "Not sure", "I'm unsure about direction", "help-circle-outline"]
+];
+
+const optionStructures = [
+  ["call", "Call", "Right to buy"],
+  ["put", "Put", "Right to sell"],
+  ["call_spread", "Call Spread", "Buy a call, sell a call"],
+  ["put_spread", "Put Spread", "Buy a put, sell a put"]
+];
+
+const horizons = [
+  ["short", "Short term", "1-4 weeks"],
+  ["medium", "Medium term", "1-3 months"],
+  ["long", "Long term", "3+ months"]
+];
+
+const tolerances = [
+  ["conservative", "Conservative", "Lower risk, smaller potential return"],
+  ["balanced", "Balanced", "Moderate risk and reward"],
+  ["aggressive", "Aggressive", "Higher risk, higher potential return"]
+];
+
+const platforms = ["Robinhood", "Webull", "Thinkorswim", "Fidelity"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const dayLabels = ["S", "M", "T", "W", "T", "F", "S"];
 
 export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
-  const [stage, setStage] = useState("start");
-  const [openStep, setOpenStep] = useState(1);
+  const [flow, setFlow] = useState("start");
+  const [step, setStep] = useState(1);
+  const [selectedTicker, setSelectedTicker] = useState(() => symbolToItem(draft.ticker, draft.tickerName, draft.tickerExchange));
   const [tickerQuery, setTickerQuery] = useState(draft.ticker || "");
-  const [tickerOpen, setTickerOpen] = useState(false);
   const [tickerResults, setTickerResults] = useState([]);
-  const [tickerLoading, setTickerLoading] = useState(false);
-  const [selectedTicker, setSelectedTicker] = useState(() => ({
-    symbol: draft.ticker || "",
-    name: draft.tickerName || "",
-    exchange: draft.tickerExchange || ""
-  }));
-  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [market, setMarket] = useState(null);
+  const [expirations, setExpirations] = useState([]);
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(parseDate(draft.expiration) || addDays(new Date(), 30)));
-  const [marketContext, setMarketContext] = useState(null);
-  const [optionContext, setOptionContext] = useState(null);
-  const [optionExpirations, setOptionExpirations] = useState([]);
-  const [marketLoading, setMarketLoading] = useState(false);
-  const [investigationReport, setInvestigationReport] = useState(null);
-  const [selectedIssue, setSelectedIssue] = useState(null);
-  const [debateLevel, setDebateLevel] = useState("Moderate");
+  const [runningProgress, setRunningProgress] = useState(0);
+  const [localReport, setLocalReport] = useState(null);
+  const [extractionStep, setExtractionStep] = useState(1);
 
-  const isOption = draft.tradeType.includes("Option");
-  const amountAtRisk = numberFromMoney(draft.amountAtRisk);
-  const premium = numberFromMoney(draft.premium);
-  const contracts = Number(String(draft.contracts || "").replace(/[^0-9]/g, "") || 0);
-  const calculatedRisk = isOption && premium > 0 && contracts > 0 ? Math.round(premium * contracts * 100) : 0;
-  const accountSize = Number(draft.accountSize || 1);
-  const riskPercentNumber = amountAtRisk / accountSize * 100;
-  const expirationDate = parseDate(draft.expiration);
-  const daysToExpiration = expirationDate ? dayDiff(stripTime(new Date()), expirationDate) : null;
-  const validation = useMemo(
-    () => validateDraft({ draft, selectedTicker, tickerQuery, amountAtRisk, riskPercentNumber, expirationDate }),
-    [draft, selectedTicker, tickerQuery, amountAtRisk, riskPercentNumber, expirationDate]
-  );
-  const investigation = useMemo(
-    () => buildInvestigation({ draft, report: investigationReport, selectedTicker, marketContext, optionContext, validation, riskPercentNumber, daysToExpiration, calculatedRisk }),
-    [draft, investigationReport, selectedTicker, marketContext, optionContext, validation, riskPercentNumber, daysToExpiration, calculatedRisk]
-  );
+  const calculations = useMemo(() => buildRiskMath(draft), [draft]);
+  const optionValidation = useMemo(() => validateOptionContract(draft, selectedTicker, calculations), [draft, selectedTicker, calculations]);
 
   useEffect(() => {
-    const clean = tickerQuery.trim();
-    if (clean.length < 1 || selectedTicker?.symbol === clean.toUpperCase()) {
+    const query = tickerQuery.trim();
+    let cancelled = false;
+
+    if (!query) {
       setTickerResults([]);
       return undefined;
     }
-    let cancelled = false;
+
+    setSearching(true);
     const timeout = setTimeout(async () => {
-      setTickerLoading(true);
       try {
-        const rows = await searchMarketSymbols(clean);
+        const remoteRows = await searchMarketSymbols(query);
         if (!cancelled) {
-          setTickerResults(withExactSymbolFallback(clean, rows).slice(0, 10));
-          setTickerOpen(true);
+          setTickerResults(buildSearchResults(query, remoteRows));
         }
-      } catch (err) {
+      } catch {
         if (!cancelled) {
-          setTickerResults(withExactSymbolFallback(clean, []));
-          setTickerOpen(true);
+          setTickerResults(buildSearchResults(query, []));
         }
       } finally {
         if (!cancelled) {
-          setTickerLoading(false);
+          setSearching(false);
         }
       }
-    }, 180);
+    }, 160);
+
     return () => {
       cancelled = true;
       clearTimeout(timeout);
     };
-  }, [tickerQuery, selectedTicker?.symbol]);
+  }, [tickerQuery]);
 
   useEffect(() => {
     const symbol = selectedTicker?.symbol;
     if (!symbol) {
-      setMarketContext(null);
-      setOptionContext(null);
-      setOptionExpirations([]);
+      setMarket(null);
+      setExpirations([]);
       return undefined;
     }
-    let cancelled = false;
-    setMarketLoading(true);
-    Promise.allSettled([getMarketBundle(symbol), getOptionsExpirations(symbol)])
-      .then(([bundleResult, expirationsResult]) => {
-        if (cancelled) return;
-        const bundle = bundleResult.status === "fulfilled" ? bundleResult.value : null;
-        const expirations = expirationsResult.status === "fulfilled" ? expirationsResult.value : null;
-        setMarketContext(bundle);
-        setOptionExpirations(Array.isArray(expirations?.expirations) ? expirations.expirations.slice(0, 6) : []);
-        if (bundle?.quote?.price) {
-          setDraft((current) => ({ ...current, underlyingPrice: String(bundle.quote.price) }));
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setMarketLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedTicker?.symbol, setDraft]);
 
-  useEffect(() => {
-    const symbol = selectedTicker?.symbol;
-    if (!symbol || !isOption || !draft.expiration || !draft.strike) {
-      setOptionContext(null);
-      return undefined;
-    }
     let cancelled = false;
-    getOptionContractContext({
-      ticker: symbol,
-      expiration: draft.expiration,
-      strike: draft.strike,
-      optionSide: draft.optionSide
-    })
-      .then((context) => {
-        if (!cancelled) setOptionContext(context);
-      })
-      .catch(() => {
-        if (!cancelled) setOptionContext(null);
-      });
+    Promise.allSettled([getMarketBundle(symbol), getOptionsExpirations(symbol)]).then(([bundleResult, expirationsResult]) => {
+      if (cancelled) return;
+      const bundle = bundleResult.status === "fulfilled" ? bundleResult.value : null;
+      const options = expirationsResult.status === "fulfilled" ? expirationsResult.value : null;
+      setMarket(bundle);
+      setExpirations(Array.isArray(options?.expirations) ? options.expirations.slice(0, 8) : []);
+      if (bundle?.quote?.price) {
+        updateDraft({ underlyingPrice: String(bundle.quote.price) });
+      }
+    });
+
     return () => {
       cancelled = true;
     };
-  }, [selectedTicker?.symbol, isOption, draft.expiration, draft.strike, draft.optionSide]);
+  }, [selectedTicker?.symbol]);
+
+  function updateDraft(updates) {
+    setDraft((current) => ({ ...current, ...updates }));
+  }
+
+  function chooseFlow(nextFlow) {
+    setFlow(nextFlow);
+    setStep(1);
+    setLocalReport(null);
+    setRunningProgress(0);
+    setExtractionStep(1);
+  }
 
   function selectTicker(item) {
-    const symbol = normalizeSymbol(item.symbol);
-    const normalizedItem = {
-      ...item,
-      symbol,
-      name: item.name || `${symbol} selected ticker`,
-      exchange: item.exchange || "US"
+    const normalized = {
+      symbol: normalizeSymbol(item.symbol),
+      name: item.name || `${normalizeSymbol(item.symbol)} selected ticker`,
+      exchange: item.exchange || "US",
+      source: item.source || "search"
     };
-    setSelectedTicker(normalizedItem);
-    setTickerQuery(symbol);
-    setTickerOpen(false);
-    setDraft({
-      ...draft,
-      ticker: symbol,
-      tickerName: normalizedItem.name,
-      tickerExchange: normalizedItem.exchange,
-      tickerSource: item.source || "search"
+    setSelectedTicker(normalized);
+    setTickerQuery(normalized.symbol);
+    setTickerResults([]);
+    updateDraft({
+      ticker: normalized.symbol,
+      tickerName: normalized.name,
+      tickerExchange: normalized.exchange,
+      tickerSource: normalized.source
     });
   }
 
-  function updateTicker(text) {
-    setTickerQuery(text);
-    setSelectedTicker(null);
+  function chooseStructure(structure) {
+    updateDraft({
+      structure,
+      optionSide: structure.includes("put") ? "put" : "call",
+      tradeType: tradeTypeFromStructure(structure)
+    });
   }
 
-  function selectExpiration(date) {
-    const iso = toIsoDate(date);
-    setDraft({ ...draft, expiration: iso, expirationSource: "calendar" });
-    setCalendarOpen(false);
+  function chooseStrategy(strategy) {
+    const nextExpiration = estimateExpirationFromHorizon(draft.timeHorizon || "medium");
+    const price = Number(draft.underlyingPrice || market?.quote?.price || 100);
+    const side = strategy.structure.includes("put") ? "put" : "call";
+    const strike = side === "put" ? Math.round(price * 0.97) : Math.round(price * 1.03);
+    updateDraft({
+      direction: strategy.direction,
+      structure: strategy.structure,
+      optionSide: side,
+      tradeType: tradeTypeFromStructure(strategy.structure),
+      expiration: nextExpiration,
+      expirationSource: "strategy_estimate",
+      strike: String(strike),
+      premium: String(strategy.premium),
+      bid: "",
+      ask: "",
+      impliedVolatility: "",
+      openInterest: "",
+      contractVolume: "",
+      contracts: "1",
+      amountAtRisk: String(Math.round(Number(strategy.premium) * 100)),
+      timeframe: horizonToTimeframe(draft.timeHorizon || "medium")
+    });
+    setFlow("option");
+    setStep(4);
   }
 
-  function selectExpirationValue(expiration) {
-    setDraft({ ...draft, expiration, expirationSource: "estimated_market_calendar" });
-    setCalendarOpen(false);
-  }
-
-  function updateOptionSizing(field, value) {
-    const clean = field === "contracts" ? value.replace(/[^0-9]/g, "") : value.replace(/[^0-9.]/g, "");
-    const next = { ...draft, [field]: clean };
-    const nextPremium = Number(String(field === "premium" ? clean : draft.premium || "").replace(/[^0-9.]/g, "") || 0);
-    const nextContracts = Number(String(field === "contracts" ? clean : draft.contracts || "").replace(/[^0-9]/g, "") || 0);
-    if (nextPremium > 0 && nextContracts > 0 && isOption) {
-      next.amountAtRisk = String(Math.round(nextPremium * nextContracts * 100));
+  function setNumericField(field, value) {
+    const clean = String(value || "").replace(/[^0-9.]/g, "");
+    const updates = { [field]: clean };
+    const premium = Number(field === "premium" ? clean : draft.premium || 0);
+    const contracts = Number(field === "contracts" ? clean : draft.contracts || 0);
+    if (premium > 0 && contracts > 0) {
+      updates.amountAtRisk = String(Math.round(premium * contracts * 100));
     }
-    setDraft(next);
+    updateDraft(updates);
   }
 
-  async function reviewTrade() {
-    if (!validation.ready || loading) {
+  function adjustContracts(delta) {
+    const next = Math.max(1, Number(draft.contracts || 1) + delta);
+    setNumericField("contracts", String(next));
+  }
+
+  async function runRiskCheck() {
+    if (!validateOptionContract(draft, selectedTicker, calculations).ready || loading) {
       return;
     }
+    setFlow("running");
+    setRunningProgress(28);
     try {
       const report = await onCheck({ stayOnCheck: true });
-      setInvestigationReport(report);
-      setSelectedIssue(null);
-      setStage("summary");
+      setRunningProgress(100);
+      setLocalReport(buildLocalResult(report, draft, selectedTicker, calculations));
+      setTimeout(() => setFlow("results"), 250);
     } catch {
-      // The error card below receives the message from app state.
+      setFlow("option");
+      setStep(6);
     }
   }
 
-  if (stage === "wizard") {
+  function mockScreenshotUpload() {
+    const extracted = {
+      ticker: "AAPL",
+      tickerName: "Apple Inc.",
+      tickerExchange: "NASDAQ",
+      direction: "bullish",
+      structure: "call",
+      optionSide: "call",
+      tradeType: "Call Option (Long)",
+      expiration: estimateExpirationFromHorizon("short"),
+      expirationSource: "screenshot_mock",
+      strike: "200",
+      premium: "2.15",
+      bid: "2.10",
+      ask: "2.20",
+      impliedVolatility: "22.4",
+      openInterest: "12345",
+      contractVolume: "8210",
+      contracts: "1",
+      underlyingPrice: "197.02",
+      amountAtRisk: "215",
+      timeframe: "1-2 Weeks"
+    };
+    setSelectedTicker(symbolToItem("AAPL", "Apple Inc.", "NASDAQ"));
+    setTickerQuery("AAPL");
+    updateDraft(extracted);
+    setExtractionStep(2);
+  }
+
+  if (flow === "option") {
     return (
       <ScreenScroll>
-        <WizardHeader onBack={() => setStage("start")} />
-        <ProgressDots current={openStep} total={6} />
-        <WizardStep number={1} title="Choose Ticker" open={openStep === 1} onPress={() => setOpenStep(1)} complete={Boolean(selectedTicker?.symbol)}>
-          <TickerPicker
+        <FlowTopBar title="Build Your Trade" step={step} total={6} onBack={() => (step === 1 ? chooseFlow("start") : setStep(step - 1))} />
+        {step === 1 && (
+          <TickerStep
+            title="Select Ticker"
+            subtitle="Enter the underlying stock or ETF."
             query={tickerQuery}
-            setQuery={updateTicker}
-            open={tickerOpen}
-            setOpen={setTickerOpen}
+            setQuery={(text) => {
+              setTickerQuery(text);
+              setSelectedTicker(null);
+            }}
             results={tickerResults}
-            loading={tickerLoading}
+            searching={searching}
             selectedTicker={selectedTicker}
+            market={market}
             onSelect={selectTicker}
-            error={validation.ticker}
+            onContinue={() => setStep(2)}
           />
-          <RecentTickers onSelect={(symbol) => selectTicker({ symbol, name: recentName(symbol), exchange: "US", source: "recent" })} />
-        </WizardStep>
-        <WizardStep number={2} title="Direction" open={openStep === 2} onPress={() => setOpenStep(2)} complete={Boolean(draft.optionSide)}>
-          <SegmentedOptions
-            label="Option Side"
-            value={draft.optionSide || "call"}
-            options={optionSides}
-            onSelect={(optionSide) => setDraft({ ...draft, optionSide, tradeType: optionSide === "put" ? "Put Option (Long)" : "Call Option (Long)" })}
+        )}
+        {step === 2 && (
+          <ChoiceStep
+            title="Choose Direction"
+            subtitle="What direction is your trade based on?"
+            value={draft.direction || "bullish"}
+            options={directions}
+            onSelect={(direction) => updateDraft({ direction })}
+            onContinue={() => setStep(3)}
           />
-          <SelectLike
-            label="Trade Type"
-            value={draft.tradeType}
-            options={tradeTypes}
-            onSelect={(tradeType) => setDraft({ ...draft, tradeType, optionSide: tradeType.includes("Put") ? "put" : "call" })}
+        )}
+        {step === 3 && (
+          <ChoiceStep
+            title="Select Option Type"
+            subtitle="What type of option are you considering?"
+            value={draft.structure || "call"}
+            options={optionStructures}
+            onSelect={chooseStructure}
+            onContinue={() => setStep(4)}
           />
-        </WizardStep>
-        <WizardStep number={3} title="Structure" open={openStep === 3} onPress={() => setOpenStep(3)} complete={isOption}>
-          <ContractContext context={marketContext} optionContext={optionContext} loading={marketLoading} selectedTicker={selectedTicker} />
-        </WizardStep>
-        <WizardStep number={4} title="Expiration" open={openStep === 4} onPress={() => setOpenStep(4)} complete={!validation.expiration}>
-          <ExpirationShortcuts expirations={optionExpirations} selected={draft.expiration} onSelect={selectExpirationValue} />
-          <ExpirationPicker
-            value={draft.expiration}
-            date={expirationDate}
-            daysToExpiration={daysToExpiration}
-            open={calendarOpen}
-            setOpen={setCalendarOpen}
+        )}
+        {step === 4 && (
+          <ExpirationStep
+            draft={draft}
+            expirations={expirations}
             visibleMonth={visibleMonth}
             setVisibleMonth={setVisibleMonth}
-            onSelect={selectExpiration}
-            error={validation.expiration}
+            onSelect={(expiration, source = "calendar") => updateDraft({ expiration, expirationSource: source })}
+            onContinue={() => setStep(5)}
           />
-        </WizardStep>
-        <WizardStep number={5} title="Strike & Premium" open={openStep === 5} onPress={() => setOpenStep(5)} complete={!validation.strike && !validation.premium}>
-          <View style={styles.inputRow}>
-            <Field
-              label="Strike"
-              value={draft.strike}
-              onChangeText={(strike) => setDraft({ ...draft, strike: strike.replace(/[^0-9.]/g, "") })}
-              keyboardType="decimal-pad"
-              error={validation.strike}
-            />
-            <Field
-              label="Premium"
-              value={draft.premium || ""}
-              onChangeText={(premiumValue) => updateOptionSizing("premium", premiumValue)}
-              keyboardType="decimal-pad"
-              error={validation.premium}
-              helper="Per share. One option contract controls 100 shares."
-            />
-          </View>
-        </WizardStep>
-        <WizardStep number={6} title="Contracts & Size" open={openStep === 6} onPress={() => setOpenStep(6)} complete={!validation.contracts && !validation.amount}>
-          <View style={styles.inputRow}>
-            <Field
-              label="Contracts"
-              value={draft.contracts || ""}
-              onChangeText={(contractsValue) => updateOptionSizing("contracts", contractsValue)}
-              keyboardType="numeric"
-              error={validation.contracts}
-            />
-            <Field
-              label="Risk"
-              value={`$${draft.amountAtRisk}`}
-              onChangeText={(amount) => setDraft({ ...draft, amountAtRisk: amount.replace(/[^0-9.]/g, "") })}
-              suffix={`${riskPercentNumber.toFixed(1)}%`}
-              keyboardType="numeric"
-              error={validation.amount}
-            />
-          </View>
-          <SelectLike label="Timeframe" value={draft.timeframe} options={timeframes} onSelect={(timeframe) => setDraft({ ...draft, timeframe })} />
-          <SizingStrip amountAtRisk={amountAtRisk} calculatedRisk={calculatedRisk} riskPercentNumber={riskPercentNumber} />
-        </WizardStep>
-        <IntelligenceStrip
-          agreement={validation.ready ? 74 : 49}
-          agents={5}
-          pattern={validation.ready ? "Ready for investigation" : "Missing contract details"}
-          missing={validation.messages.length}
-        />
-        {!validation.ready ? <InlineWarning items={validation.messages} /> : null}
-        {error ? <ErrorCard message="Could not generate this check. Try again." /> : null}
-        <PrimaryButton label={loading ? "Reviewing..." : "Review Trade"} onPress={reviewTrade} disabled={loading || !validation.ready} />
+        )}
+        {step === 5 && (
+          <ContractDetailsStep
+            draft={draft}
+            setNumericField={setNumericField}
+            validation={optionValidation}
+            onContinue={() => setStep(6)}
+          />
+        )}
+        {step === 6 && (
+          <SizeStep
+            draft={draft}
+            calculations={calculations}
+            validation={optionValidation}
+            setNumericField={setNumericField}
+            setMaxRiskRule={(value) => {
+              const percent = Number(String(value || "").replace(/[^0-9.]/g, ""));
+              if (percent > 0) {
+                updateDraft({ riskBudget: Math.round(Number(draft.accountSize || 0) * percent / 100) });
+              }
+            }}
+            adjustContracts={adjustContracts}
+            onSubmit={runRiskCheck}
+            loading={loading}
+            error={error}
+          />
+        )}
       </ScreenScroll>
     );
   }
 
-  if (stage === "summary") {
-    return <InvestigationSummary investigation={investigation} draft={draft} selectedTicker={selectedTicker} onBack={() => setStage("wizard")} onDebate={() => setStage("debate")} onIssue={(issue) => { setSelectedIssue(issue); setStage("issue"); }} />;
+  if (flow === "stock") {
+    return (
+      <ScreenScroll>
+        <FlowTopBar title="Explore An Idea" step={step} total={5} onBack={() => (step === 1 ? chooseFlow("start") : setStep(step - 1))} />
+        {step === 1 && (
+          <TickerStep
+            title="What's the stock?"
+            subtitle="Enter the stock or ETF you want to explore."
+            query={tickerQuery}
+            setQuery={(text) => {
+              setTickerQuery(text);
+              setSelectedTicker(null);
+            }}
+            results={tickerResults}
+            searching={searching}
+            selectedTicker={selectedTicker}
+            market={market}
+            onSelect={selectTicker}
+            onContinue={() => setStep(2)}
+          />
+        )}
+        {step === 2 && (
+          <ChoiceStep
+            title="What's your outlook?"
+            subtitle="Help us understand your main expectation."
+            value={draft.direction || "bullish"}
+            options={directions}
+            onSelect={(direction) => updateDraft({ direction })}
+            onContinue={() => setStep(3)}
+          />
+        )}
+        {step === 3 && (
+          <ChoiceStep
+            title="Time Horizon"
+            subtitle="What's your expected timeframe?"
+            value={draft.timeHorizon || "medium"}
+            options={horizons}
+            onSelect={(timeHorizon) => updateDraft({ timeHorizon, timeframe: horizonToTimeframe(timeHorizon) })}
+            onContinue={() => setStep(4)}
+          />
+        )}
+        {step === 4 && (
+          <ChoiceStep
+            title="Risk Tolerance"
+            subtitle="How much risk are you comfortable with?"
+            value={draft.riskTolerance || "balanced"}
+            options={tolerances}
+            onSelect={(riskTolerance) => updateDraft({ riskTolerance })}
+            onContinue={() => setStep(5)}
+          />
+        )}
+        {step === 5 && (
+          <StrategyStep
+            ticker={selectedTicker?.symbol || draft.ticker}
+            direction={draft.direction || "bullish"}
+            riskTolerance={draft.riskTolerance || "balanced"}
+            horizon={draft.timeHorizon || "medium"}
+            onSelect={chooseStrategy}
+          />
+        )}
+      </ScreenScroll>
+    );
   }
 
-  if (stage === "debate") {
-    return <CommitteeDebate investigation={investigation} level={debateLevel} setLevel={setDebateLevel} onBack={() => setStage("summary")} />;
+  if (flow === "screenshot") {
+    return (
+      <ScreenScroll>
+        <FlowTopBar title="Screenshot Flow" step={extractionStep} total={5} onBack={() => (extractionStep === 1 ? chooseFlow("start") : setExtractionStep(extractionStep - 1))} />
+        {extractionStep === 1 && <UploadStep onUpload={mockScreenshotUpload} />}
+        {extractionStep === 2 && <ExtractionStep onContinue={() => setExtractionStep(3)} />}
+        {extractionStep === 3 && <ExtractedReviewStep draft={draft} onEdit={() => { setFlow("option"); setStep(5); }} onContinue={() => setExtractionStep(4)} />}
+        {extractionStep === 4 && <ConfirmContractStep draft={draft} calculations={calculations} onContinue={() => setExtractionStep(5)} />}
+        {extractionStep === 5 && <RunningStep progress={82} onContinue={runRiskCheck} loading={loading} error={error} buttonLabel="View Investigation Results" />}
+      </ScreenScroll>
+    );
   }
 
-  if (stage === "issue") {
-    return <IssueCard issue={selectedIssue || investigation.issues[0]} onBack={() => setStage("summary")} />;
+  if (flow === "running") {
+    return (
+      <ScreenScroll>
+        <RunningStep progress={runningProgress} loading={loading} error={error} buttonLabel="Finalizing..." />
+      </ScreenScroll>
+    );
+  }
+
+  if (flow === "results") {
+    return (
+      <ScreenScroll>
+        <InvestigationResults
+          result={localReport || buildLocalResult(null, draft, selectedTicker, calculations)}
+          onBack={() => chooseFlow("start")}
+          onDebate={() => setFlow("debate")}
+          onIssue={() => setFlow("issue")}
+        />
+      </ScreenScroll>
+    );
+  }
+
+  if (flow === "debate") {
+    return (
+      <ScreenScroll>
+        <CommitteeResults result={localReport || buildLocalResult(null, draft, selectedTicker, calculations)} onBack={() => setFlow("results")} />
+      </ScreenScroll>
+    );
+  }
+
+  if (flow === "issue") {
+    return (
+      <ScreenScroll>
+        <IssueDeepDive result={localReport || buildLocalResult(null, draft, selectedTicker, calculations)} onBack={() => setFlow("results")} />
+      </ScreenScroll>
+    );
   }
 
   return (
     <ScreenScroll>
-      <Header
-        title={`Good morning, ${draft.user}`}
-        subtitle="Check the contract before the story convinces you."
-        right={<Text style={styles.bell}>!</Text>}
-      />
+      <Header title={`Good morning, ${draft.user}`} subtitle="Choose how much information you already have." />
       <Card style={styles.snapshot}>
         <View style={styles.rowBetween}>
           <Text style={sharedText.cardLabel}>Account Snapshot</Text>
-          <View style={[styles.statusPill, riskPercentNumber > 3 && styles.statusPillRisk]}>
-            <Text style={[styles.statusText, riskPercentNumber > 3 && styles.statusTextRisk]}>{riskPercentNumber > 3 ? "High" : "OK"}</Text>
-          </View>
+          <StatusPill label="OK" tone="good" />
         </View>
-        <View style={styles.twoCols}>
-          <Metric label="Account Size" value={money(draft.accountSize)} />
-          <Metric label="Risk Budget" value={`${money(draft.riskBudget)} (${Number(draft.riskBudget || 0) / accountSize * 100 || 0}%)`} />
+        <View style={styles.snapshotGrid}>
+          <MiniStat label="Account Size" value={formatMoney(draft.accountSize)} />
+          <MiniStat label="Risk Rule" value={`${riskRulePercent(draft)}% max`} />
         </View>
         <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, riskPercentNumber > 3 && styles.progressRisk, { width: `${Math.min(riskPercentNumber * 24, 100)}%` }]} />
+          <View style={[styles.progressFill, { width: `${Math.min(Number(draft.riskBudget || 0) / Number(draft.accountSize || 1) * 100 * 20, 100)}%` }]} />
         </View>
-        <Text style={sharedText.microcopy}>{riskPercentNumber.toFixed(1)}% of account planned for this check</Text>
+        <Text style={sharedText.microcopy}>RiskWise checks the contract before the story convinces you.</Text>
       </Card>
       <Card>
         <Text style={sharedText.sectionTitle}>How would you like to check a trade?</Text>
-        {startChoices.map((choice) => (
-          <Pressable key={choice.key} style={[styles.choiceCard, choice.key === "option" && styles.choiceCardActive]} onPress={() => setStage("wizard")}>
-            <View style={[styles.choiceIcon, choice.key === "option" && styles.choiceIconActive]}>
-              <Ionicons name={choice.icon} size={18} color={choice.key === "option" ? "#FFFFFF" : palette.green} />
+        {flowChoices.map((choice) => (
+          <Pressable key={choice.key} style={styles.flowChoice} onPress={() => chooseFlow(choice.key)}>
+            <View style={[styles.flowIcon, { backgroundColor: `${choice.accent}16` }]}>
+              <Ionicons name={choice.icon} size={19} color={choice.accent} />
             </View>
-            <View style={styles.choiceCopy}>
-              <Text style={styles.choiceTitle}>{choice.title}</Text>
-              <Text style={styles.choiceText}>{choice.text}</Text>
+            <View style={styles.flex}>
+              <Text style={styles.flowTitle}>{choice.title}</Text>
+              <Text style={styles.flowSubtitle}>{choice.subtitle}</Text>
+              <Text style={styles.flowBody}>{choice.body}</Text>
             </View>
             <Ionicons name="chevron-forward" size={17} color={palette.muted} />
           </Pressable>
@@ -380,86 +524,71 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
   );
 }
 
-function WizardHeader({ onBack }) {
+function FlowTopBar({ title, step, total, onBack }) {
   return (
-    <View style={styles.wizardHeader}>
-      <Pressable style={styles.backButton} onPress={onBack}>
+    <View style={styles.topBar}>
+      <Pressable style={styles.roundButton} onPress={onBack}>
         <Ionicons name="chevron-back" size={18} color={palette.dark} />
       </Pressable>
-      <View>
-        <Text style={styles.wizardTitle}>Build Your Trade</Text>
-        <Text style={styles.wizardSub}>Step-by-step contract builder</Text>
+      <View style={styles.topCenter}>
+        <Text style={styles.stepCount}>{step} of {total}</Text>
+        <Text style={styles.flowHeading}>{title}</Text>
       </View>
+      <View style={styles.roundButtonGhost} />
     </View>
   );
 }
 
-function ProgressDots({ current, total }) {
+function TickerStep({ title, subtitle, query, setQuery, results, searching, selectedTicker, market, onSelect, onContinue }) {
+  const ready = Boolean(selectedTicker?.symbol);
   return (
-    <View style={styles.stepTrack}>
-      {Array.from({ length: total }, (_, index) => (
-        <View key={index} style={[styles.stepDot, index + 1 <= current && styles.stepDotActive]} />
-      ))}
+    <View>
+      <StepTitle title={title} subtitle={subtitle} />
+      <SearchBox query={query} setQuery={setQuery} results={results} searching={searching} selectedTicker={selectedTicker} onSelect={onSelect} />
+      <Text style={styles.miniLabel}>Popular</Text>
+      <View style={styles.chipRow}>
+        {popularSymbols.map((symbol) => (
+          <Pressable key={symbol} style={styles.chip} onPress={() => onSelect(localSymbols.find((item) => item.symbol === symbol) || { symbol })}>
+            <Text style={styles.chipText}>{symbol}</Text>
+          </Pressable>
+        ))}
+      </View>
+      {ready ? <TickerCard ticker={selectedTicker} market={market} /> : null}
+      <PrimaryButton label="Continue" onPress={onContinue} disabled={!ready} />
     </View>
   );
 }
 
-function WizardStep({ number, title, open, complete, onPress, children }) {
+function SearchBox({ query, setQuery, results, searching, selectedTicker, onSelect }) {
+  const showResults = query.trim().length > 0 && (!selectedTicker || selectedTicker.symbol !== normalizeSymbol(query));
   return (
-    <Card style={styles.stepCard}>
-      <Pressable style={styles.stepHeader} onPress={onPress}>
-        <View style={styles.stepTitleWrap}>
-          <Text style={styles.stepNumber}>{number}.</Text>
-          <Text style={styles.stepTitle}>{title}</Text>
-        </View>
-        <View style={styles.stepRight}>
-          {complete ? <Ionicons name="checkmark-circle" size={16} color={palette.green} /> : null}
-          <Ionicons name={open ? "chevron-up" : "chevron-forward"} size={16} color={palette.muted} />
-        </View>
-      </Pressable>
-      {open ? <View style={styles.stepBody}>{children}</View> : null}
-    </Card>
-  );
-}
-
-function TickerPicker({ query, setQuery, open, setOpen, results, loading, selectedTicker, onSelect, error }) {
-  return (
-    <View style={styles.fieldWrap}>
-      <Text style={styles.inputLabel}>Ticker</Text>
-      <View style={[styles.searchBox, error && styles.fieldError]}>
-        <Ionicons name="search" size={16} color={palette.muted} />
+    <View style={styles.searchWrap}>
+      <View style={styles.searchBox}>
+        <Ionicons name="search-outline" size={17} color={palette.muted} />
         <TextInput
           value={query}
           onChangeText={setQuery}
-          onFocus={() => setOpen(true)}
-          placeholder="Search ticker or company"
+          placeholder="Search ticker, e.g. AAPL"
           placeholderTextColor="#9AA5A0"
           autoCapitalize="characters"
           style={styles.searchInput}
         />
-        {selectedTicker?.symbol ? <Ionicons name="checkmark-circle" size={17} color={palette.green} /> : null}
+        {selectedTicker?.symbol ? <Ionicons name="checkmark-circle" size={18} color={palette.green} /> : null}
       </View>
-      {selectedTicker?.name ? (
-        <View style={styles.selectedTickerCard}>
-          <Text style={styles.selectedTickerSymbol}>{selectedTicker.symbol}</Text>
-          <Text style={styles.selectedTickerName} numberOfLines={1}>{selectedTicker.name}</Text>
-        </View>
-      ) : null}
-      {error ? <Text style={styles.fieldErrorText}>{error}</Text> : null}
-      {open && (query.trim().length > 0 || results.length > 0) ? (
-        <View style={styles.dropdown}>
-          {loading ? <Text style={styles.dropdownEmpty}>Searching...</Text> : null}
-          {!loading && results.length === 0 ? <Text style={styles.dropdownEmpty}>Type a symbol, then select a match.</Text> : null}
+      {showResults ? (
+        <View style={styles.searchResults}>
+          {searching ? <Text style={styles.dropdownEmpty}>Searching...</Text> : null}
+          {!searching && results.length === 0 ? <Text style={styles.dropdownEmpty}>No matches yet. Try the exact ticker.</Text> : null}
           {results.map((item) => (
-            <Pressable key={`${item.symbol}-${item.name}`} style={styles.tickerOption} onPress={() => onSelect(item)}>
-              <View style={styles.tickerLogo}>
-                <Text style={styles.tickerLogoText}>{item.symbol.slice(0, 1)}</Text>
+            <Pressable key={`${item.symbol}-${item.name}-${item.source}`} style={styles.resultRow} onPress={() => onSelect(item)}>
+              <View style={styles.symbolAvatar}>
+                <Text style={styles.symbolAvatarText}>{item.symbol.slice(0, 1)}</Text>
               </View>
-              <View style={styles.tickerCopy}>
-                <Text style={styles.tickerSymbol}>{item.symbol}</Text>
-                <Text style={styles.tickerName} numberOfLines={1}>{item.name}</Text>
+              <View style={styles.flex}>
+                <Text style={styles.resultSymbol}>{item.symbol}</Text>
+                <Text style={styles.resultName} numberOfLines={1}>{item.name}</Text>
               </View>
-              <Text style={styles.exchangeText}>{item.exchange || "US"}</Text>
+              <Text style={styles.resultExchange}>{item.exchange || "US"}</Text>
             </Pressable>
           ))}
         </View>
@@ -468,524 +597,762 @@ function TickerPicker({ query, setQuery, open, setOpen, results, loading, select
   );
 }
 
-function RecentTickers({ onSelect }) {
+function TickerCard({ ticker, market }) {
+  const quote = market?.quote;
+  const price = quote?.price || mockPrice(ticker.symbol);
+  const change = quote?.change_percent ?? mockChange(ticker.symbol);
   return (
-    <View style={styles.recentWrap}>
-      <Text style={styles.miniLabel}>Recent</Text>
-      <View style={styles.recentRow}>
-        {["AAPL", "MSFT", "SPY", "NVDA", "AMZN"].map((symbol) => (
-          <Pressable key={symbol} style={styles.recentChip} onPress={() => onSelect(symbol)}>
-            <Text style={styles.recentText}>{symbol}</Text>
-          </Pressable>
-        ))}
+    <Card style={styles.tickerCard}>
+      <View style={styles.symbolLogo}>
+        <Text style={styles.symbolLogoText}>{ticker.symbol.slice(0, 1)}</Text>
       </View>
+      <View style={styles.flex}>
+        <Text style={styles.bigSymbol}>{ticker.symbol}</Text>
+        <Text style={styles.resultName}>{ticker.name}</Text>
+      </View>
+      <View style={styles.priceBox}>
+        <Text style={styles.priceText}>${Number(price).toFixed(2)}</Text>
+        <Text style={styles.changeText}>{Number(change) >= 0 ? "+" : ""}{Number(change).toFixed(2)}%</Text>
+      </View>
+    </Card>
+  );
+}
+
+function ChoiceStep({ title, subtitle, options, value, onSelect, onContinue }) {
+  return (
+    <View>
+      <StepTitle title={title} subtitle={subtitle} />
+      {options.map(([key, label, text, icon]) => (
+        <SelectableRow key={key} active={value === key} title={label} subtitle={text} icon={icon || "ellipse-outline"} onPress={() => onSelect(key)} />
+      ))}
+      <PrimaryButton label="Continue" onPress={onContinue} />
     </View>
   );
 }
 
-function ContractContext({ context, optionContext, loading, selectedTicker }) {
-  if (!selectedTicker?.symbol) {
-    return <Text style={styles.emptyHint}>Choose a ticker first so RiskWise can attach market context.</Text>;
-  }
-  const quote = context?.quote;
-  const selected = optionContext?.selected || {};
-  const price = quote?.price;
-  const chartData = price ? [price * 0.985, price * 0.99, price * 0.997, price * 0.992, price * 1.004, price * 1.01] : [42, 45, 44, 48, 47, 50];
+function SelectableRow({ active, title, subtitle, icon, onPress }) {
   return (
-    <View style={styles.contextBox}>
-      <View style={styles.rowBetween}>
-        <View>
-          <Text style={styles.contextTitle}>{selectedTicker.symbol} structure context</Text>
-          <Text style={styles.contextSub} numberOfLines={1}>{loading ? "Loading quote..." : context?.profile?.companyName || selectedTicker.name || "Selected ticker"}</Text>
+    <Pressable style={[styles.selectable, active && styles.selectableActive]} onPress={onPress}>
+      <View style={[styles.radio, active && styles.radioActive]}>
+        <Ionicons name={active ? "checkmark" : icon} size={14} color={active ? "#FFFFFF" : palette.muted} />
+      </View>
+      <View style={styles.flex}>
+        <Text style={styles.selectableTitle}>{title}</Text>
+        <Text style={styles.selectableSubtitle}>{subtitle}</Text>
+      </View>
+      {active ? <Ionicons name="checkmark-circle" size={18} color={palette.green} /> : null}
+    </Pressable>
+  );
+}
+
+function ExpirationStep({ draft, expirations, visibleMonth, setVisibleMonth, onSelect, onContinue }) {
+  const selected = parseDate(draft.expiration);
+  const dte = selected ? dayDiff(new Date(), selected) : null;
+  return (
+    <View>
+      <StepTitle title="Expiration" subtitle="Choose the expiration date." />
+      <Pressable style={styles.dateSelector}>
+        <View style={styles.rowCenter}>
+          <Ionicons name="calendar-outline" size={17} color={palette.dark} />
+          <View>
+            <Text style={styles.dateText}>{selected ? displayDate(selected) : "Choose expiration"}</Text>
+            <Text style={styles.dateSub}>{dte !== null ? `${Math.max(dte, 0)} calendar days left` : "Future dates only"}</Text>
+          </View>
         </View>
-        <View style={styles.priceBadge}>
-          <Text style={styles.priceText}>{price ? `$${Number(price).toFixed(2)}` : "Quote"}</Text>
-        </View>
-      </View>
-      <MiniLineChart data={chartData} height={54} />
-      <View style={styles.contextChips}>
-        <Text style={styles.contextChip}>{context?.profile?.sector || "Sector pending"}</Text>
-        <Text style={styles.contextChip}>{selected.moneynessLabel || "Moneyness pending"}</Text>
-        <Text style={styles.contextChip}>{optionContext?.status?.replaceAll("_", " ") || "Options data later"}</Text>
-      </View>
-    </View>
-  );
-}
-
-function SegmentedOptions({ label, value, options, onSelect }) {
-  return (
-    <View style={styles.fieldWrap}>
-      <Text style={styles.inputLabel}>{label}</Text>
-      <View style={styles.segmentRow}>
-        {options.map((option) => (
-          <Pressable key={option.value} style={[styles.segmentButton, value === option.value && styles.segmentButtonActive]} onPress={() => onSelect(option.value)}>
-            <Text style={[styles.segmentText, value === option.value && styles.segmentTextActive]}>{option.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function ExpirationShortcuts({ expirations, selected, onSelect }) {
-  if (!expirations?.length) {
-    return null;
-  }
-  return (
-    <View style={styles.expirationStrip}>
-      <Text style={styles.miniLabel}>Estimated monthly expirations</Text>
-      <View style={styles.expirationChips}>
-        {expirations.slice(0, 4).map((expiration) => (
-          <Pressable key={expiration} style={[styles.expirationChip, selected === expiration && styles.expirationChipActive]} onPress={() => onSelect(expiration)}>
-            <Text style={[styles.expirationChipText, selected === expiration && styles.expirationChipTextActive]}>{shortDate(expiration)}</Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-function ExpirationPicker({ value, date, daysToExpiration, open, setOpen, visibleMonth, setVisibleMonth, onSelect, error }) {
-  const dates = buildCalendar(visibleMonth);
-  const today = stripTime(new Date());
-  return (
-    <View style={styles.fieldWrap}>
-      <Text style={styles.inputLabel}>Expiration</Text>
-      <Pressable style={[styles.dateButton, error && styles.fieldError]} onPress={() => setOpen(!open)}>
-        <View>
-          <Text style={styles.dateText}>{date ? displayDate(date) : value || "Choose date"}</Text>
-          <Text style={styles.dateSub}>{daysToExpiration !== null && daysToExpiration >= 0 ? `${daysToExpiration} calendar days left` : "Future dates only"}</Text>
-        </View>
-        <Ionicons name="calendar-outline" size={18} color={palette.green} />
+        <Ionicons name="chevron-down" size={16} color={palette.muted} />
       </Pressable>
-      {error ? <Text style={styles.fieldErrorText}>{error}</Text> : null}
-      {open ? (
-        <View style={styles.calendarPanel}>
-          <View style={styles.calendarHeader}>
-            <Pressable style={styles.calendarNav} onPress={() => setVisibleMonth(startOfMonth(addMonths(visibleMonth, -1)))}>
-              <Ionicons name="chevron-back" size={14} color={palette.dark} />
+      {expirations.length ? (
+        <View style={styles.suggestedDates}>
+          {expirations.slice(0, 4).map((expiration) => (
+            <Pressable key={expiration} style={[styles.dateChip, expiration === draft.expiration && styles.dateChipActive]} onPress={() => onSelect(expiration, "market_expiration")}>
+              <Text style={[styles.dateChipText, expiration === draft.expiration && styles.dateChipTextActive]}>{shortDate(expiration)}</Text>
             </Pressable>
-            <Text style={styles.calendarTitle}>{monthNames[visibleMonth.getMonth()]} {visibleMonth.getFullYear()}</Text>
-            <Pressable style={styles.calendarNav} onPress={() => setVisibleMonth(startOfMonth(addMonths(visibleMonth, 1)))}>
-              <Ionicons name="chevron-forward" size={14} color={palette.dark} />
-            </Pressable>
-          </View>
-          <View style={styles.weekRow}>
-            {dayLabels.map((label, index) => <Text key={`${label}-${index}`} style={styles.weekLabel}>{label}</Text>)}
-          </View>
-          <View style={styles.daysGrid}>
-            {dates.map((item) => {
-              const disabled = item.date < today || !item.inMonth;
-              const selected = date && toIsoDate(item.date) === toIsoDate(date);
-              return (
-                <Pressable
-                  key={toIsoDate(item.date)}
-                  style={[styles.dayCell, selected && styles.dayCellSelected, disabled && styles.dayCellDisabled]}
-                  disabled={disabled}
-                  onPress={() => onSelect(item.date)}
-                >
-                  <Text style={[styles.dayText, selected && styles.dayTextSelected, disabled && styles.dayTextDisabled]}>{item.date.getDate()}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          ))}
         </View>
       ) : null}
+      <MiniCalendar visibleMonth={visibleMonth} selected={selected} setVisibleMonth={setVisibleMonth} onSelect={(date) => onSelect(toIsoDate(date), "calendar")} />
+      <PrimaryButton label="Continue" onPress={onContinue} disabled={!selected || dte < 0} />
     </View>
   );
 }
 
-function SizingStrip({ amountAtRisk, calculatedRisk, riskPercentNumber }) {
-  const items = [
-    ["Max loss", money(amountAtRisk)],
-    ["Calc risk", calculatedRisk ? money(calculatedRisk) : "Pending"],
-    ["Account", `${riskPercentNumber.toFixed(1)}%`]
-  ];
+function MiniCalendar({ visibleMonth, selected, setVisibleMonth, onSelect }) {
+  const cells = buildCalendar(visibleMonth);
+  const today = stripTime(new Date());
   return (
-    <View style={styles.sizingStrip}>
-      {items.map(([label, value]) => (
-        <View key={label} style={styles.sizingItem}>
-          <Text style={styles.miniLabel}>{label}</Text>
-          <Text style={styles.sizingValue}>{value}</Text>
+    <Card style={styles.calendarCard}>
+      <View style={styles.calendarHeader}>
+        <Pressable style={styles.calendarNav} onPress={() => setVisibleMonth(addMonths(visibleMonth, -1))}>
+          <Ionicons name="chevron-back" size={15} color={palette.dark} />
+        </Pressable>
+        <Text style={styles.calendarTitle}>{monthNames[visibleMonth.getMonth()]} {visibleMonth.getFullYear()}</Text>
+        <Pressable style={styles.calendarNav} onPress={() => setVisibleMonth(addMonths(visibleMonth, 1))}>
+          <Ionicons name="chevron-forward" size={15} color={palette.dark} />
+        </Pressable>
+      </View>
+      <View style={styles.weekRow}>
+        {dayLabels.map((day) => <Text key={day} style={styles.weekLabel}>{day}</Text>)}
+      </View>
+      <View style={styles.daysGrid}>
+        {cells.map(({ date, inMonth }) => {
+          const disabled = date < today || !inMonth;
+          const active = selected && toIsoDate(selected) === toIsoDate(date);
+          return (
+            <Pressable
+              key={date.toISOString()}
+              style={[styles.dayCell, active && styles.dayCellActive, disabled && styles.dayCellDisabled]}
+              disabled={disabled}
+              onPress={() => onSelect(date)}
+            >
+              <Text style={[styles.dayText, active && styles.dayTextActive]}>{date.getDate()}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </Card>
+  );
+}
+
+function ContractDetailsStep({ draft, setNumericField, validation, onContinue }) {
+  const requiredReady = !validation.strike && !validation.premium;
+  return (
+    <View>
+      <StepTitle title="Contract Details" subtitle="Enter the contract price and key details." />
+      <FieldRow label="Strike Price" value={draft.strike} onChangeText={(value) => setNumericField("strike", value)} prefix="$" error={validation.strike} />
+      <FieldRow label="Premium (Mid)" value={draft.premium} onChangeText={(value) => setNumericField("premium", value)} prefix="$" error={validation.premium} />
+      <FieldRow label="Bid" value={draft.bid} onChangeText={(value) => setNumericField("bid", value)} prefix="$" />
+      <FieldRow label="Ask" value={draft.ask} onChangeText={(value) => setNumericField("ask", value)} prefix="$" />
+      <FieldRow label="IV (Implied Volatility)" value={draft.impliedVolatility} onChangeText={(value) => setNumericField("impliedVolatility", value)} suffix="%" />
+      <FieldRow label="Open Interest" value={draft.openInterest} onChangeText={(value) => setNumericField("openInterest", value)} />
+      <FieldRow label="Volume" value={draft.contractVolume} onChangeText={(value) => setNumericField("contractVolume", value)} />
+      <Text style={styles.helperText}>Bid/ask helps us check liquidity and estimated cost. IV, open interest, and volume make the risk read stronger.</Text>
+      <PrimaryButton label="Continue" onPress={onContinue} disabled={!requiredReady} />
+    </View>
+  );
+}
+
+function FieldRow({ label, value, onChangeText, prefix, suffix, error }) {
+  return (
+    <View style={styles.fieldRow}>
+      <View style={styles.flex}>
+        <Text style={styles.fieldLabel}>{label}</Text>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      </View>
+      <View style={[styles.compactInput, error && styles.inputError]}>
+        {prefix ? <Text style={styles.inputAdornment}>{prefix}</Text> : null}
+        <TextInput value={String(value || "")} onChangeText={onChangeText} keyboardType="decimal-pad" style={styles.compactTextInput} placeholder="Optional" placeholderTextColor="#9AA5A0" />
+        {suffix ? <Text style={styles.inputAdornment}>{suffix}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function SizeStep({ draft, calculations, validation, setNumericField, setMaxRiskRule, adjustContracts, onSubmit, loading, error }) {
+  const tone = calculations.accountRiskPercent <= riskRulePercent(draft) ? "good" : calculations.accountRiskPercent <= riskRulePercent(draft) * 1.5 ? "warn" : "risk";
+  return (
+    <View>
+      <StepTitle title="Size & Guardrails" subtitle="Set position size and review risk." />
+      <View style={styles.stepperRow}>
+        <View>
+          <Text style={styles.fieldLabel}>Contracts</Text>
+          <Text style={styles.helperText}>Each options contract controls 100 shares.</Text>
         </View>
+        <View style={styles.stepper}>
+          <Pressable style={styles.stepperButton} onPress={() => adjustContracts(-1)}><Text style={styles.stepperText}>-</Text></Pressable>
+          <TextInput value={String(draft.contracts || "1")} onChangeText={(value) => setNumericField("contracts", value)} keyboardType="numeric" style={styles.stepperInput} />
+          <Pressable style={styles.stepperButton} onPress={() => adjustContracts(1)}><Text style={styles.stepperText}>+</Text></Pressable>
+        </View>
+      </View>
+      <FieldRow label="Account Size" value={String(draft.accountSize || "")} onChangeText={(value) => setNumericField("accountSize", value)} prefix="$" />
+      <FieldRow label="Max Risk Rule" value={String(riskRulePercent(draft))} onChangeText={setMaxRiskRule} suffix="%" />
+      <Card style={styles.mathCard}>
+        <MetricGrid
+          items={[
+            ["Max Loss", formatMoney(calculations.maxLoss), tone],
+            ["Account Risk", `${calculations.accountRiskPercent.toFixed(2)}%`, tone],
+            ["Breakeven", `$${calculations.breakeven.toFixed(2)}`, "neutral"],
+            ["DTE", `${Math.max(calculations.daysToExpiration, 0)} days`, calculations.daysToExpiration < 7 ? "warn" : "neutral"]
+          ]}
+        />
+        <StatusPill
+          label={tone === "good" ? `Within your ${riskRulePercent(draft)}% risk rule` : tone === "warn" ? "Slightly above your risk rule" : "Above your risk rule"}
+          tone={tone}
+        />
+      </Card>
+      <InsightList calculations={calculations} validation={validation} />
+      {error ? <ErrorCard message="Could not generate this check. Try again." /> : null}
+      <PrimaryButton label={loading ? "Reviewing..." : "Review Trade Check"} onPress={onSubmit} disabled={!validation.ready || loading} />
+    </View>
+  );
+}
+
+function StrategyStep({ ticker, direction, riskTolerance, horizon, onSelect }) {
+  const strategies = buildStrategies(direction, riskTolerance, horizon);
+  return (
+    <View>
+      <StepTitle title="Suggested Strategies" subtitle={`Based on your outlook for ${ticker || "the selected stock"}.`} />
+      {strategies.map((strategy) => (
+        <Card key={strategy.name} style={styles.strategyCard}>
+          <View style={styles.rowBetween}>
+            <View>
+              <Text style={styles.strategyName}>{strategy.name}</Text>
+              <Text style={styles.strategyWhy}>{strategy.why}</Text>
+            </View>
+            <StatusPill label={strategy.risk} tone={strategy.tone} />
+          </View>
+          <View style={styles.strategyFacts}>
+            <MiniStat label="Max Profit" value={strategy.maxProfit} />
+            <MiniStat label="Max Loss" value={strategy.maxLoss} />
+          </View>
+          <PrimaryButton label="Explore Strategy" onPress={() => onSelect(strategy)} />
+        </Card>
       ))}
     </View>
   );
 }
 
-function InvestigationSummary({ investigation, draft, selectedTicker, onBack, onDebate, onIssue }) {
+function UploadStep({ onUpload }) {
   return (
-    <ScreenScroll>
-      <View style={styles.wizardHeader}>
-        <Pressable style={styles.backButton} onPress={onBack}>
-          <Ionicons name="chevron-back" size={18} color={palette.dark} />
-        </Pressable>
-        <View style={styles.flex}>
-          <Text style={styles.wizardTitle}>Trade Investigation</Text>
-          <Text style={styles.wizardSub}>High-level snapshot before the debate</Text>
+    <View>
+      <StepTitle title="Upload Screenshot" subtitle="Upload a screenshot of your options contract." />
+      <Pressable style={styles.uploadBox} onPress={onUpload}>
+        <View style={styles.uploadIcon}>
+          <Ionicons name="camera-outline" size={27} color="#7C3AED" />
         </View>
-        <Ionicons name="share-outline" size={18} color={palette.dark} />
+        <Text style={styles.uploadTitle}>Tap to upload</Text>
+        <Text style={styles.uploadSub}>PNG, JPG - Max 10MB</Text>
+      </Pressable>
+      <Text style={styles.miniLabel}>Supported platforms</Text>
+      <View style={styles.chipRow}>
+        {platforms.map((platform) => <View key={platform} style={styles.platformChip}><Text style={styles.platformText}>{platform}</Text></View>)}
       </View>
-      <Card style={styles.summaryHero}>
-        <View style={styles.rowBetween}>
-          <View style={styles.flex}>
-            <Text style={styles.heroTicker}>{selectedTicker?.symbol || draft.ticker} ${draft.strike} {titleCase(draft.optionSide || "call")}</Text>
-            <Text style={styles.heroSub}>{displayDate(parseDate(draft.expiration))} - {draft.contracts || 1} Contract</Text>
-          </View>
-          <ConfidenceRing value={investigation.score} label="/100" sublabel={investigation.verdict} size={84} />
-        </View>
-        <View style={styles.convictionBox}>
-          <View>
-            <Text style={styles.convictionTitle}>{investigation.conviction}</Text>
-            <Text style={styles.convictionSub}>{investigation.verdict}</Text>
-          </View>
-          <View style={styles.signalDot} />
-        </View>
-        <View style={styles.summaryGrid}>
-          {investigation.summaryCards.map((item) => (
-            <View key={item.label} style={styles.summaryMini}>
-              <Ionicons name={item.icon} size={15} color={item.tone === "good" ? palette.green : item.tone === "risk" ? palette.red : palette.amber} />
-              <Text style={styles.summaryMiniLabel}>{item.label}</Text>
-              <Text style={[styles.summaryMiniValue, item.tone === "risk" && styles.riskText, item.tone === "warn" && styles.warnText]}>{item.value}</Text>
-            </View>
-          ))}
-        </View>
-      </Card>
-      <Card>
-        <Text style={sharedText.sectionTitle}>Why RiskWise is hesitating</Text>
-        <Text style={styles.smallSub}>{investigation.issues.length} key areas evaluated</Text>
-        {investigation.issues.map((issue) => (
-          <IssueRow key={issue.id} issue={issue} onPress={() => onIssue(issue)} />
-        ))}
-        <PrimaryButton label="Open Committee Debate" onPress={onDebate} style={styles.debateButton} />
-      </Card>
-    </ScreenScroll>
-  );
-}
-
-function IssueRow({ issue, onPress }) {
-  return (
-    <Pressable style={styles.issueRow} onPress={onPress}>
-      <View style={[styles.issueIcon, issue.tone === "risk" && styles.issueIconRisk, issue.tone === "warn" && styles.issueIconWarn]}>
-        <Ionicons name={issue.icon} size={14} color={issue.tone === "risk" ? palette.red : issue.tone === "warn" ? palette.amber : palette.green} />
-      </View>
-      <View style={styles.flex}>
-        <Text style={styles.issueTitle}>{issue.title}</Text>
-        <Text style={styles.issueSub}>{issue.oneLine}</Text>
-      </View>
-      <Text style={[styles.issueBadge, issue.tone === "risk" && styles.issueBadgeRisk, issue.tone === "warn" && styles.issueBadgeWarn]}>{issue.status}</Text>
-      <Ionicons name="chevron-forward" size={15} color={palette.muted} />
-    </Pressable>
-  );
-}
-
-function CommitteeDebate({ investigation, level, setLevel, onBack }) {
-  const messages = buildDebateMessages(investigation, level);
-  return (
-    <ScreenScroll>
-      <View style={styles.wizardHeader}>
-        <Pressable style={styles.backButton} onPress={onBack}>
-          <Ionicons name="chevron-back" size={18} color={palette.dark} />
-        </Pressable>
-        <View style={styles.flex}>
-          <Text style={styles.wizardTitle}>Committee Debate</Text>
-          <Text style={styles.wizardSub}>Multi-agent risk conversation</Text>
-        </View>
-        <View style={styles.liveBadge}><Text style={styles.liveText}>Live</Text></View>
-      </View>
-      <View style={styles.levelRow}>
-        {["Easy", "Moderate", "Advanced"].map((item) => (
-          <Pressable key={item} style={[styles.levelChip, level === item && styles.levelChipActive]} onPress={() => setLevel(item)}>
-            <Text style={[styles.levelText, level === item && styles.levelTextActive]}>{item}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <Card>
-        <Text style={sharedText.sectionTitle}>Live Discussion</Text>
-        <Text style={styles.smallSub}>4 agents - based on the current check</Text>
-        {messages.map((message) => (
-          <View key={message.name} style={styles.debateRow}>
-            <View style={[styles.agentAvatar, { backgroundColor: message.color }]}>
-              <Text style={styles.agentInitial}>{message.initials}</Text>
-            </View>
-            <View style={styles.flex}>
-              <View style={styles.rowBetween}>
-                <Text style={styles.agentName}>{message.name}</Text>
-                <Text style={styles.agentTime}>{message.time}</Text>
-              </View>
-              {message.points.map((point) => (
-                <Text key={point} style={styles.agentPoint}>- {point}</Text>
-              ))}
-            </View>
+      <Card style={styles.tipCard}>
+        {["Include full contract details", "Make sure strike, expiration, and premium are visible", "Avoid blurry or cropped images"].map((tip) => (
+          <View key={tip} style={styles.tipRow}>
+            <Ionicons name="checkmark-circle-outline" size={15} color={palette.green} />
+            <Text style={styles.tipText}>{tip}</Text>
           </View>
         ))}
       </Card>
-    </ScreenScroll>
-  );
-}
-
-function IssueCard({ issue, onBack }) {
-  if (!issue) {
-    return null;
-  }
-  return (
-    <ScreenScroll>
-      <View style={styles.wizardHeader}>
-        <Pressable style={styles.backButton} onPress={onBack}>
-          <Ionicons name="chevron-back" size={18} color={palette.dark} />
-        </Pressable>
-        <View style={styles.flex}>
-          <Text style={styles.wizardTitle}>{issue.title}</Text>
-          <Text style={styles.wizardSub}>Detailed technical breakdown</Text>
-        </View>
-        <Text style={[styles.scoreText, issue.tone === "risk" && styles.riskText, issue.tone === "warn" && styles.warnText]}>{issue.score}/100</Text>
-      </View>
-      <Card style={styles.deepDiveCard}>
-        <View style={styles.rowBetween}>
-          <View>
-            <Text style={styles.deepStatus}>{issue.status}</Text>
-            <Text style={styles.deepSub}>{issue.headline}</Text>
-          </View>
-          <Text style={[styles.deepScore, issue.tone === "risk" && styles.riskText, issue.tone === "warn" && styles.warnText]}>{issue.score}</Text>
-        </View>
-        <SectionBlock title="Evidence" rows={issue.evidence} />
-        <SectionBlock title="Why it matters" rows={[issue.why]} />
-        <SectionBlock title="What would help" rows={issue.whatWouldHelp} />
-        <View style={styles.nextQuestion}>
-          <Text style={styles.blockTitle}>Next question</Text>
-          <Text style={styles.blockText}>{issue.nextQuestion}</Text>
-        </View>
-      </Card>
-    </ScreenScroll>
-  );
-}
-
-function SectionBlock({ title, rows }) {
-  return (
-    <View style={styles.block}>
-      <Text style={styles.blockTitle}>{title}</Text>
-      {rows.map((row) => <Text key={row} style={styles.blockText}>- {row}</Text>)}
     </View>
   );
 }
 
-function InlineWarning({ items }) {
-  if (!items.length) {
-    return null;
-  }
+function ExtractionStep({ onContinue }) {
   return (
-    <Card style={styles.warningCard}>
-      <Text style={styles.warningTitle}>Before RiskWise can check it</Text>
-      {items.map((item) => (
-        <View key={item} style={styles.warningRow}>
-          <Ionicons name="alert-circle-outline" size={15} color={palette.teal} />
-          <Text style={styles.warningText}>{item}</Text>
+    <View>
+      <StepTitle title="Extracting Details..." subtitle="We're reading the screenshot and extracting contract details." />
+      <Card style={styles.extractCard}>
+        <View style={styles.progressRing}>
+          <Ionicons name="scan-outline" size={28} color="#7C3AED" />
+        </View>
+        <Text style={styles.extractTitle}>Extracting...</Text>
+        {["Reading text", "Identifying fields", "Verifying values"].map((item, index) => (
+          <View key={item} style={styles.tipRow}>
+            <Ionicons name={index < 2 ? "checkmark-circle" : "ellipse-outline"} size={15} color={index < 2 ? palette.green : palette.muted} />
+            <Text style={styles.tipText}>{item}</Text>
+          </View>
+        ))}
+      </Card>
+      <PrimaryButton label="Review Extracted Details" onPress={onContinue} />
+    </View>
+  );
+}
+
+function ExtractedReviewStep({ draft, onEdit, onContinue }) {
+  const rows = [
+    ["Ticker", draft.ticker],
+    ["Strategy", draft.tradeType],
+    ["Expiration", displayDate(parseDate(draft.expiration))],
+    ["Strike Price", `$${Number(draft.strike || 0).toFixed(2)}`],
+    ["Premium", `$${Number(draft.premium || 0).toFixed(2)}`],
+    ["Contracts", draft.contracts],
+    ["Underlying Price", `$${Number(draft.underlyingPrice || 0).toFixed(2)}`]
+  ];
+  return (
+    <View>
+      <StepTitle title="Review Extracted Details" subtitle="Please confirm the extracted details." />
+      <Card>
+        {rows.map(([label, value]) => <KeyValue key={label} label={label} value={value} />)}
+      </Card>
+      <Pressable style={styles.secondaryButton} onPress={onEdit}>
+        <Text style={styles.secondaryButtonText}>Edit Manually</Text>
+      </Pressable>
+      <PrimaryButton label="Confirm & Continue" onPress={onContinue} />
+    </View>
+  );
+}
+
+function ConfirmContractStep({ draft, calculations, onContinue }) {
+  return (
+    <View>
+      <StepTitle title="Confirm Contract" subtitle="Everything looks good?" />
+      <Card>
+        <Text style={styles.bigSymbol}>{draft.ticker}</Text>
+        <Text style={styles.resultName}>{draft.tradeType}</Text>
+        <KeyValue label="Strike" value={`$${Number(draft.strike || 0).toFixed(2)}`} />
+        <KeyValue label="Expiration" value={displayDate(parseDate(draft.expiration))} />
+        <KeyValue label="Premium" value={`$${Number(draft.premium || 0).toFixed(2)}`} />
+        <KeyValue label="Contracts" value={draft.contracts} />
+        <KeyValue label="Max Loss" value={formatMoney(calculations.maxLoss)} />
+      </Card>
+      <Card style={styles.successCard}>
+        <Text style={styles.successText}>Looks good. RiskWise will still treat extracted values as user-confirmed, not live market data.</Text>
+      </Card>
+      <PrimaryButton label="Continue to Analysis" onPress={onContinue} />
+    </View>
+  );
+}
+
+function RunningStep({ progress, onContinue, loading, error, buttonLabel }) {
+  return (
+    <View>
+      <StepTitle title="Running Risk Check" subtitle="We're analyzing your trade with our AI committee." />
+      <Card>
+        {["Calculating key metrics", "Checking risk & liquidity", "AI agents analyzing", "Building investigation report", "Finalizing insights"].map((item, index) => (
+          <View key={item} style={styles.timelineRow}>
+            <View style={[styles.timelineDot, index <= Math.floor(progress / 22) && styles.timelineDotActive]} />
+            <Text style={styles.tipText}>{item}</Text>
+            {index <= Math.floor(progress / 22) ? <Ionicons name="checkmark" size={14} color={palette.green} /> : null}
+          </View>
+        ))}
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${Math.min(progress, 100)}%` }]} />
+        </View>
+        <Text style={sharedText.microcopy}>{Math.min(progress, 100)}%</Text>
+      </Card>
+      {error ? <ErrorCard message="Could not generate this check. Try again." /> : null}
+      {onContinue ? <PrimaryButton label={loading ? "Analyzing..." : buttonLabel} onPress={onContinue} disabled={loading} /> : null}
+    </View>
+  );
+}
+
+function InvestigationResults({ result, onBack, onDebate, onIssue }) {
+  return (
+    <View>
+      <FlowTopBar title="Trade Investigation" step={1} total={1} onBack={onBack} />
+      <Card style={styles.heroCard}>
+        <View style={styles.rowBetween}>
+          <View>
+            <Text style={styles.heroTitle}>{result.title}</Text>
+            <Text style={styles.heroSub}>{result.subtitle}</Text>
+          </View>
+          <ScoreCircle value={result.score} />
+        </View>
+        <View style={styles.verdictBox}>
+          <StatusDot tone={result.tone} />
+          <View>
+            <Text style={styles.verdictTitle}>{result.verdict}</Text>
+            <Text style={styles.verdictSub}>{result.verdictSub}</Text>
+          </View>
+        </View>
+      </Card>
+      <MetricGrid
+        items={[
+          ["Max Loss", formatMoney(result.maxLoss), result.tone],
+          ["Breakeven", `$${result.breakeven.toFixed(2)}`, "neutral"],
+          ["Required Move", `${result.requiredMovePercent.toFixed(2)}%`, result.requiredMovePercent > 8 ? "warn" : "neutral"],
+          ["Acct Risk", `${result.accountRiskPercent.toFixed(2)}%`, result.tone]
+        ]}
+      />
+      <Card>
+        <Text style={sharedText.sectionTitle}>Why RiskWise is hesitating</Text>
+        {result.issues.map((issue) => (
+          <Pressable key={issue.title} style={styles.issueRow} onPress={onIssue}>
+            <View style={[styles.issueIcon, issue.tone === "risk" && styles.issueIconRisk, issue.tone === "warn" && styles.issueIconWarn]}>
+              <Ionicons name={issue.icon} size={16} color={toneColor(issue.tone)} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.issueTitle}>{issue.title}</Text>
+              <Text style={styles.issueSub}>{issue.detail}</Text>
+            </View>
+            <StatusPill label={issue.label} tone={issue.tone} />
+          </Pressable>
+        ))}
+      </Card>
+      <Pressable style={styles.debateEntry} onPress={onDebate}>
+        <View>
+          <Text style={styles.strategyName}>Open Committee Debate</Text>
+          <Text style={styles.resultName}>Bull, skeptic, risk judge, and risk manager discuss the setup.</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={17} color={palette.green} />
+      </Pressable>
+      <Card style={styles.successCard}>
+        <Text style={styles.successText}>Saved checks and coaching context can use this report. Educational only, not financial advice.</Text>
+      </Card>
+    </View>
+  );
+}
+
+function CommitteeResults({ result, onBack }) {
+  const agents = [
+    ["Bull Analyst", "Structure aligns with the thesis, but only if price confirmation appears before theta eats the premium."],
+    ["Skeptic", `${result.issues[0].title} is the weak link. A correct direction can still lose if the contract is too expensive.`],
+    ["Risk Judge", `Account risk is ${result.accountRiskPercent.toFixed(2)}%. Sizing must be judged before conviction.`],
+    ["Risk Manager", "The cleanest next step is defining what would invalidate the setup, not increasing exposure."]
+  ];
+  return (
+    <View>
+      <FlowTopBar title="Committee Debate" step={1} total={1} onBack={onBack} />
+      <View style={styles.levelRow}>
+        {["Easy", "Moderate", "Advanced"].map((level) => <StatusPill key={level} label={level} tone={level === "Moderate" ? "good" : "neutral"} />)}
+      </View>
+      <Card>
+        <View style={styles.rowBetween}>
+          <Text style={sharedText.sectionTitle}>Live Discussion</Text>
+          <StatusPill label="Live" tone="risk" />
+        </View>
+        {agents.map(([name, text], index) => (
+          <View key={name} style={styles.agentRow}>
+            <View style={[styles.agentAvatar, { backgroundColor: ["#DDF8E6", "#DDEAFF", "#EFE5FF", "#FFF0CC"][index] }]}>
+              <Text style={styles.agentInitials}>{name.split(" ").map((word) => word[0]).join("")}</Text>
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.agentName}>{name}</Text>
+              <Text style={styles.agentText}>{text}</Text>
+            </View>
+          </View>
+        ))}
+      </Card>
+    </View>
+  );
+}
+
+function IssueDeepDive({ result, onBack }) {
+  const issue = result.issues[0];
+  return (
+    <View>
+      <FlowTopBar title={issue.title} step={1} total={1} onBack={onBack} />
+      <Card>
+        <View style={styles.rowBetween}>
+          <View>
+            <Text style={styles.strategyName}>{issue.title}</Text>
+            <Text style={styles.resultName}>Detailed breakdown</Text>
+          </View>
+          <Text style={[styles.deepScore, { color: toneColor(issue.tone) }]}>{issue.score}/100</Text>
+        </View>
+        <Block title="Evidence" lines={issue.evidence} />
+        <Block title="Why it matters" lines={[issue.why]} />
+        <Block title="What would help" lines={issue.whatHelps} />
+        <View style={styles.nextQuestion}>
+          <Text style={styles.blockTitle}>Next question</Text>
+          <Text style={styles.tipText}>{issue.nextQuestion}</Text>
+        </View>
+      </Card>
+    </View>
+  );
+}
+
+function Block({ title, lines }) {
+  return (
+    <View style={styles.block}>
+      <Text style={styles.blockTitle}>{title}</Text>
+      {lines.map((line) => <Text key={line} style={styles.blockText}>- {line}</Text>)}
+    </View>
+  );
+}
+
+function StepTitle({ title, subtitle }) {
+  return (
+    <View style={styles.stepTitleBlock}>
+      <Text style={styles.screenTitle}>{title}</Text>
+      <Text style={styles.screenSubtitle}>{subtitle}</Text>
+    </View>
+  );
+}
+
+function StatusPill({ label, tone }) {
+  return (
+    <View style={[styles.pill, tone === "good" && styles.pillGood, tone === "warn" && styles.pillWarn, tone === "risk" && styles.pillRisk]}>
+      <Text style={[styles.pillText, tone === "good" && styles.pillTextGood, tone === "warn" && styles.pillTextWarn, tone === "risk" && styles.pillTextRisk]}>{label}</Text>
+    </View>
+  );
+}
+
+function StatusDot({ tone }) {
+  return <View style={[styles.statusDot, { backgroundColor: toneColor(tone) }]} />;
+}
+
+function ScoreCircle({ value }) {
+  return (
+    <View style={styles.scoreCircle}>
+      <Text style={styles.scoreValue}>{value}</Text>
+      <Text style={styles.scoreOutOf}>/100</Text>
+    </View>
+  );
+}
+
+function MetricGrid({ items }) {
+  return (
+    <View style={styles.metricGrid}>
+      {items.map(([label, value, tone]) => (
+        <Card key={label} style={styles.metricCard}>
+          <Text style={sharedText.cardLabel}>{label}</Text>
+          <Text style={[styles.metricValue, { color: toneColor(tone) }]}>{value}</Text>
+        </Card>
+      ))}
+    </View>
+  );
+}
+
+function MiniStat({ label, value }) {
+  return (
+    <View style={styles.miniStat}>
+      <Text style={sharedText.cardLabel}>{label}</Text>
+      <Text style={styles.miniStatValue}>{value}</Text>
+    </View>
+  );
+}
+
+function KeyValue({ label, value }) {
+  return (
+    <View style={styles.keyValue}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <Text style={styles.keyValueText}>{value}</Text>
+    </View>
+  );
+}
+
+function InsightList({ calculations, validation }) {
+  const rows = [
+    validation.strike || validation.premium ? "Strike and premium are required before the check can run." : "Max loss is calculated from premium x contracts x 100.",
+    calculations.bidAskSpreadPercent !== null ? `Bid/ask spread is ${calculations.bidAskSpreadPercent.toFixed(1)}% of premium.` : "Bid/ask is optional, but missing liquidity data lowers confidence.",
+    calculations.requiredMovePercent > 0 ? `Underlying needs about ${calculations.requiredMovePercent.toFixed(2)}% before breakeven at expiration.` : "Breakeven move is close to current price."
+  ];
+  return (
+    <Card style={styles.tipCard}>
+      {rows.map((row) => (
+        <View key={row} style={styles.tipRow}>
+          <Ionicons name="information-circle-outline" size={15} color={palette.green} />
+          <Text style={styles.tipText}>{row}</Text>
         </View>
       ))}
     </Card>
   );
 }
 
-function validateDraft({ draft, selectedTicker, tickerQuery, amountAtRisk, riskPercentNumber, expirationDate }) {
-  const messages = [];
-  const isOption = draft.tradeType.includes("Option");
-  const ticker = !selectedTicker?.symbol || selectedTicker.symbol !== tickerQuery.trim().toUpperCase()
-    ? "Select a ticker from the dropdown instead of typing a loose symbol."
-    : "";
-  const strikeNumber = Number(draft.strike || 0);
-  const premiumNumber = Number(String(draft.premium || "").replace(/[^0-9.]/g, "") || 0);
-  const contractsNumber = Number(String(draft.contracts || "").replace(/[^0-9]/g, "") || 0);
-  const calculatedRisk = premiumNumber * contractsNumber * 100;
-  const strike = isOption && strikeNumber <= 0 ? "Strike is required for option checks." : "";
-  const premium = isOption && premiumNumber <= 0 ? "Premium is required for option checks." : "";
-  const contracts = isOption && contractsNumber < 1 ? "Contracts must be at least 1." : "";
-  const today = stripTime(new Date());
-  const expiration = !expirationDate
-    ? "Choose an expiration date."
-    : expirationDate < today
-      ? "Expiration cannot be in the past."
-      : "";
-  const amount = amountAtRisk <= 0
-    ? "Amount at risk must be greater than zero."
-    : isOption && calculatedRisk > 0 && Math.abs(calculatedRisk - amountAtRisk) > Math.max(10, calculatedRisk * 0.25)
-      ? "Amount at risk should match premium x contracts x 100."
-      : riskPercentNumber > 10
-        ? "This risks more than 10% of the account. Lower it before checking."
-        : "";
-  [ticker, strike, premium, contracts, expiration, amount].forEach((item) => item && messages.push(item));
-  return { ticker, strike, premium, contracts, expiration, amount, messages, ready: messages.length === 0 };
+function buildRiskMath(draft) {
+  const premium = Number(draft.premium || 0);
+  const contracts = Math.max(0, Number(draft.contracts || 0));
+  const strike = Number(draft.strike || 0);
+  const accountSize = Math.max(1, Number(draft.accountSize || 1));
+  const underlying = Number(draft.underlyingPrice || 0) || strike;
+  const side = draft.optionSide || (String(draft.tradeType || "").toLowerCase().includes("put") ? "put" : "call");
+  const maxLoss = premium * contracts * 100;
+  const accountRiskPercent = maxLoss / accountSize * 100;
+  const breakeven = side === "put" ? strike - premium : strike + premium;
+  const requiredMovePercent = underlying > 0
+    ? side === "put"
+      ? Math.max(0, (underlying - breakeven) / underlying * 100)
+      : Math.max(0, (breakeven - underlying) / underlying * 100)
+    : 0;
+  const bid = Number(draft.bid || 0);
+  const ask = Number(draft.ask || 0);
+  const bidAskSpreadPercent = bid > 0 && ask > bid && premium > 0 ? (ask - bid) / premium * 100 : null;
+  const expiration = parseDate(draft.expiration);
+  const daysToExpiration = expiration ? dayDiff(new Date(), expiration) : 0;
+  return { premium, contracts, strike, maxLoss, accountRiskPercent, breakeven, requiredMovePercent, bidAskSpreadPercent, daysToExpiration };
 }
 
-function buildInvestigation({ draft, report, selectedTicker, marketContext, optionContext, validation, riskPercentNumber, daysToExpiration, calculatedRisk }) {
-  const score = Math.max(30, Math.min(92, Math.round(report?.setupScore || 78 - validation.messages.length * 9 - (riskPercentNumber > 3 ? 12 : 0) - (daysToExpiration !== null && daysToExpiration < 7 ? 10 : 0))));
-  const moneyness = optionContext?.selected?.moneynessLabel || "Moneyness unknown";
-  const dataMissing = !optionContext?.selected?.impliedVolatility && !draft.impliedVolatility;
-  const signalScore = score < 65 ? 45 : 68;
+function validateOptionContract(draft, selectedTicker, calculations) {
+  const messages = [];
+  const validation = {
+    ticker: selectedTicker?.symbol ? "" : "Select a ticker from search results.",
+    strike: calculations.strike > 0 ? "" : "Strike is required.",
+    premium: calculations.premium > 0 ? "" : "Premium is required.",
+    contracts: calculations.contracts > 0 ? "" : "At least one contract is required.",
+    expiration: parseDate(draft.expiration) && calculations.daysToExpiration >= 0 ? "" : "Choose a future expiration."
+  };
+  Object.values(validation).forEach((message) => message && messages.push(message));
+  return { ...validation, messages, ready: messages.length === 0 };
+}
+
+function buildLocalResult(report, draft, selectedTicker, calculations) {
+  const rule = riskRulePercent(draft);
+  const liquidityKnown = Number(draft.openInterest || 0) > 0 || Number(draft.contractVolume || 0) > 0 || calculations.bidAskSpreadPercent !== null;
+  const riskTone = calculations.accountRiskPercent <= rule ? "good" : calculations.accountRiskPercent <= rule * 1.5 ? "warn" : "risk";
+  const score = Math.max(28, Math.min(92, Math.round(
+    (report?.setupScore || 62)
+    - (riskTone === "risk" ? 18 : riskTone === "warn" ? 8 : 0)
+    - (!liquidityKnown ? 10 : 0)
+    - (calculations.daysToExpiration < 7 ? 8 : 0)
+    - (calculations.requiredMovePercent > 8 ? 7 : 0)
+  )));
+  const weakest = !liquidityKnown ? "Liquidity Context" : riskTone !== "good" ? "Position Size" : calculations.requiredMovePercent > 8 ? "Signal Clarity" : "Volatility Context";
+  const title = `${draft.ticker || selectedTicker?.symbol || "Contract"} $${draft.strike || "?"} ${draft.optionSide === "put" ? "Put" : "Call"}`;
+  const subtitle = `${displayDate(parseDate(draft.expiration))} - ${draft.contracts || 1} Contract${Number(draft.contracts || 1) === 1 ? "" : "s"}`;
   const issues = [
     {
-      id: "signal",
-      title: "Signal Clarity",
-      icon: "analytics-outline",
-      status: signalScore < 60 ? "Weak" : "Mixed",
-      score: signalScore,
-      tone: signalScore < 60 ? "risk" : "warn",
-      oneLine: signalScore < 60 ? "Needs price confirmation." : "Thesis is plausible but not fully confirmed.",
-      headline: "Needs Review",
-      evidence: [
-        `${selectedTicker?.symbol || draft.ticker} context is attached, but price confirmation is still separate from contract math.`,
-        `${moneyness} based on the current strike and underlying context.`,
-        "No live technical confirmation is being inferred from future data."
-      ],
-      why: "Options punish unclear timing because premium can decay even if the broad thesis is directionally reasonable.",
-      whatWouldHelp: ["Clear entry condition", "Defined invalidation level", "Volume or trend confirmation"],
-      nextQuestion: "What exact condition would invalidate this trade idea?"
+      title: weakest,
+      score: weakest === "Liquidity Context" ? 48 : weakest === "Position Size" ? 52 : 61,
+      label: weakest === "Position Size" ? "Size Risk" : weakest === "Signal Clarity" ? "Needs Proof" : "Unknown",
+      tone: weakest === "Position Size" && riskTone === "risk" ? "risk" : "warn",
+      icon: weakest === "Position Size" ? "shield-outline" : weakest === "Signal Clarity" ? "analytics-outline" : "water-outline",
+      detail: weakest === "Liquidity Context" ? "Bid/ask, volume, open interest, or IV are missing." : weakest === "Position Size" ? "Risk is high relative to the account rule." : "The contract needs a clearer price thesis.",
+      evidence: weakest === "Liquidity Context"
+        ? ["Bid/ask spread is missing or unclear.", "Open interest and volume may be unknown.", "IV context is not confirmed."]
+        : [`Account risk is ${calculations.accountRiskPercent.toFixed(2)}%.`, `Your rule is ${rule}% max risk per trade.`, "Sizing should be decided before conviction."],
+      why: weakest === "Liquidity Context" ? "Options can look attractive but become hard to exit when liquidity is weak." : "A good thesis can still hurt the account if the premium risk is too large.",
+      whatHelps: weakest === "Liquidity Context" ? ["Add bid and ask", "Check open interest above 1,000", "Compare IV to normal levels"] : ["Reduce contracts", "Lower premium at risk", "Use a spread to define risk"],
+      nextQuestion: weakest === "Liquidity Context" ? "Is this contract liquid enough to enter and exit cleanly?" : "What position size keeps the trade survivable if it expires worthless?"
     },
     {
-      id: "contract",
       title: "Contract Structure",
+      score: report?.setupScore || 70,
+      label: calculations.maxLoss > 0 ? "Defined" : "Missing",
+      tone: calculations.maxLoss > 0 ? "good" : "risk",
       icon: "document-text-outline",
-      status: calculatedRisk > 0 ? "Defined" : "Incomplete",
-      score: calculatedRisk > 0 ? 76 : 50,
-      tone: calculatedRisk > 0 ? "good" : "warn",
-      oneLine: calculatedRisk > 0 ? "Max loss is mechanically defined." : "Premium and contract count need tightening.",
-      headline: calculatedRisk > 0 ? "Acceptable" : "Needs Inputs",
-      evidence: [
-        `Premium x contracts x 100 implies about ${money(calculatedRisk || 0)} at risk.`,
-        `Selected structure: ${draft.tradeType}.`,
-        `Expiration: ${draft.expiration || "not selected"}.`
-      ],
-      why: "A good idea can still be a poor option contract if premium, expiration, or strike create too much required movement.",
-      whatWouldHelp: ["Compare a closer/farther expiration", "Compare long option vs debit spread", "Check breakeven against realistic move"],
-      nextQuestion: "Is this contract chosen for liquidity, conviction, or just price?"
+      detail: "Premium paid defines max loss for long options."
     },
     {
-      id: "volatility",
-      title: "Volatility Context",
-      icon: "pulse-outline",
-      status: dataMissing ? "Unknown" : "Attached",
-      score: dataMissing ? 42 : 70,
-      tone: dataMissing ? "risk" : "good",
-      oneLine: dataMissing ? "Live IV, Greeks, and chain quality are not attached yet." : "Volatility fields are attached.",
-      headline: dataMissing ? "Missing Data" : "Visible",
-      evidence: [
-        marketContext?.earnings?.date ? `Next earnings context: ${marketContext.earnings.date}.` : "Earnings date is not confirmed in this check.",
-        "Live IV crush risk requires a real options chain provider.",
-        "Bid/ask, open interest, and volume are not guaranteed from the current fallback."
-      ],
-      why: "Around events, implied volatility can fall after uncertainty clears, so the option can lose even when direction is only slightly right.",
-      whatWouldHelp: ["IV percentile or IV rank", "Bid/ask spread", "Open interest and volume", "Known earnings/event date"],
-      nextQuestion: "Is this trade trying to benefit from movement, volatility, or both?"
-    },
-    {
-      id: "size",
-      title: "Position Size",
-      icon: "shield-checkmark-outline",
-      status: riskPercentNumber <= 2 ? "Good" : riskPercentNumber <= 5 ? "Elevated" : "Too High",
-      score: riskPercentNumber <= 2 ? 84 : riskPercentNumber <= 5 ? 63 : 35,
-      tone: riskPercentNumber <= 2 ? "good" : riskPercentNumber <= 5 ? "warn" : "risk",
-      oneLine: `${riskPercentNumber.toFixed(1)}% of account is planned for this check.`,
-      headline: riskPercentNumber <= 2 ? "Within Rules" : "Needs Guardrail",
-      evidence: [
-        `Account size: ${money(draft.accountSize)}.`,
-        `Amount at risk: ${money(draft.amountAtRisk)}.`,
-        `Risk budget: ${money(draft.riskBudget)}.`
-      ],
-      why: "Sizing controls whether a wrong thesis is a learning cost or an account-damaging event.",
-      whatWouldHelp: ["Keep loss inside risk budget", "Predefine max loss", "Avoid increasing size to compensate for uncertainty"],
-      nextQuestion: "Would this trade still feel reasonable if it immediately went to max loss?"
-    },
-    {
-      id: "behavior",
-      title: "Behavior Match",
-      icon: "person-circle-outline",
-      status: "No Issues",
-      score: 74,
-      tone: "good",
-      oneLine: "No obvious rule conflict from the current inputs.",
-      headline: "Aligned",
-      evidence: ["Timeframe is declared.", "Max loss is visible.", "No leverage is assumed."],
-      why: "Most option losses become worse when the trader changes the plan mid-trade.",
-      whatWouldHelp: ["Write the exit condition", "Decide whether this is a thesis trade or a volatility trade", "Save the check before acting"],
-      nextQuestion: "What would make you not take this trade?"
+      title: "Breakeven Hurdle",
+      score: calculations.requiredMovePercent > 8 ? 54 : 72,
+      label: calculations.requiredMovePercent > 8 ? "High Move" : "Manageable",
+      tone: calculations.requiredMovePercent > 8 ? "warn" : "good",
+      icon: "trending-up-outline",
+      detail: `Required move is about ${calculations.requiredMovePercent.toFixed(2)}% by expiration.`
     }
   ];
-  const weakest = issues.reduce((low, item) => item.score < low.score ? item : low, issues[0]);
   return {
+    title,
+    subtitle,
     score,
-    conviction: score >= 78 ? "High Conviction" : score >= 62 ? "Mixed Conviction" : "Low Conviction",
-    verdict: score >= 78 ? "Strong Setup" : score >= 62 ? "Needs Review" : "Weak Setup",
-    weakest,
-    issues,
-    summaryCards: [
-      { label: "Strength", value: riskPercentNumber <= 2 ? "Risk Size" : "Defined Loss", tone: "good", icon: "checkmark-circle" },
-      { label: "Main Risk", value: weakest.title, tone: weakest.tone === "good" ? "warn" : weakest.tone, icon: "warning" },
-      { label: "Missing", value: dataMissing ? "Volatility" : "Less", tone: dataMissing ? "risk" : "good", icon: "close-circle" }
-    ]
+    tone: riskTone,
+    verdict: score >= 75 ? "Clearer Setup" : score >= 55 ? "Mixed Conviction" : "Needs Review",
+    verdictSub: score >= 75 ? "Main risks are visible." : "Wait for the weak area to improve.",
+    maxLoss: calculations.maxLoss,
+    breakeven: calculations.breakeven,
+    requiredMovePercent: calculations.requiredMovePercent,
+    accountRiskPercent: calculations.accountRiskPercent,
+    issues
   };
 }
 
-function buildDebateMessages(investigation, level) {
-  const detailed = level === "Advanced";
-  const simple = level === "Easy";
+function buildStrategies(direction, riskTolerance, horizon) {
+  const bullish = direction !== "bearish";
+  const aggressive = riskTolerance === "aggressive";
+  const premiumBase = horizon === "short" ? 2.15 : horizon === "medium" ? 4.2 : 6.5;
   return [
     {
-      name: "Bull Analyst",
-      initials: "BA",
-      color: "#BAE7C7",
-      time: "2m ago",
-      points: simple
-        ? ["The loss is defined.", "The trade idea is organized enough to review."]
-        : ["Structure aligns with a defined-risk thesis.", detailed ? "Premium loss is capped, but expected move still needs support." : "Max loss is visible, and timing is at least declared.", "Entry needs price confirmation."]
+      name: bullish ? "Long Call" : "Long Put",
+      structure: bullish ? "call" : "put",
+      direction,
+      why: "Best for strong directional moves where the thesis needs convex upside.",
+      maxProfit: bullish ? "High / uncapped" : "High until stock approaches zero",
+      maxLoss: "Premium paid",
+      risk: aggressive ? "Aggressive" : "Most Direct",
+      tone: aggressive ? "warn" : "good",
+      premium: premiumBase
     },
     {
-      name: "Skeptic",
-      initials: "SK",
-      color: "#CFE2FF",
-      time: "1m ago",
-      points: simple
-        ? ["The weak part is confirmation.", "Unknown volatility can hurt options."]
-        : [`${investigation.weakest.title} is the weakest part of the check.`, detailed ? "If IV is elevated, breakeven may understate the real hurdle after volatility contracts." : "IV rank unknown adds risk.", "Time decay can make a slow correct thesis lose."]
+      name: bullish ? "Bull Call Spread" : "Bear Put Spread",
+      structure: bullish ? "call_spread" : "put_spread",
+      direction,
+      why: "Best for a moderate move where lower premium risk matters more than unlimited upside.",
+      maxProfit: "Limited",
+      maxLoss: "Defined",
+      risk: "Balanced",
+      tone: "good",
+      premium: Math.max(1.15, premiumBase * 0.55).toFixed(2)
     },
     {
-      name: "Risk Judge",
-      initials: "RJ",
-      color: "#E5D8FF",
-      time: "30s ago",
-      points: ["Position size is judged before direction.", `${investigation.weakest.title} score is ${investigation.weakest.score}/100.`, simple ? "Fix the weakest issue first." : "The committee wants one clear invalidation rule."]
-    },
-    {
-      name: "Risk Manager",
-      initials: "RM",
-      color: "#FDE7B0",
-      time: "10s ago",
-      points: ["No trade instruction is being given.", "The check is useful only if the missing data is resolved.", detailed ? "Final confidence should drop when liquidity, IV, or catalyst data is unavailable." : "Upside path is unclear until evidence improves."]
+      name: bullish ? "Cash Secured Put" : "Covered Call",
+      structure: bullish ? "put" : "call",
+      direction: bullish ? "neutral" : "neutral",
+      why: "Best for income-style thinking, but only if assignment risk is understood.",
+      maxProfit: "Premium received",
+      maxLoss: bullish ? "Stock purchase risk" : "Opportunity cost / stock downside",
+      risk: "Conservative",
+      tone: "neutral",
+      premium: Math.max(0.85, premiumBase * 0.35).toFixed(2)
     }
   ];
 }
 
-function withExactSymbolFallback(query, rows) {
+function buildSearchResults(query, remoteRows = []) {
   const clean = normalizeSymbol(query);
-  const items = Array.isArray(rows) ? rows.map((item) => ({ ...item, symbol: normalizeSymbol(item.symbol) })) : [];
-  if (!clean || clean.length > 8 || !/^[A-Z0-9.-]+$/.test(clean)) {
-    return items;
-  }
-  if (items.some((item) => item.symbol === clean)) {
-    return items;
-  }
-  return [
-    ...items,
-    {
-      symbol: clean,
-      name: `${clean} exact symbol`,
-      exchange: "Verify quote",
-      sector: "Manual selection",
-      source: "exact_symbol"
-    }
-  ];
+  const normalizedRemote = remoteRows
+    .map((item) => ({
+      symbol: normalizeSymbol(item.symbol),
+      name: item.name || `${normalizeSymbol(item.symbol)} ticker`,
+      exchange: item.exchange || "US",
+      source: item.source || "api"
+    }))
+    .filter((item) => item.symbol);
+  const localMatches = localSymbols.filter((item) =>
+    item.symbol.includes(clean) || item.name.toUpperCase().includes(clean)
+  );
+  const exactManual = clean && /^[A-Z0-9.-]{1,8}$/.test(clean)
+    ? [{ symbol: clean, name: `${clean} exact ticker - verify quote`, exchange: "Manual", source: "manual" }]
+    : [];
+  const combined = [...normalizedRemote, ...localMatches, ...exactManual];
+  const seen = new Set();
+  return combined.filter((item) => {
+    const key = item.symbol;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
+function symbolToItem(symbol, name, exchange) {
+  return { symbol: normalizeSymbol(symbol), name: name || recentName(symbol), exchange: exchange || "US" };
+}
+
+function tradeTypeFromStructure(structure) {
+  if (structure === "put") return "Put Option (Long)";
+  if (structure === "call_spread") return "Call Option Spread";
+  if (structure === "put_spread") return "Put Option Spread";
+  return "Call Option (Long)";
+}
+
+function horizonToTimeframe(horizon) {
+  if (horizon === "short") return "1-2 Weeks";
+  if (horizon === "long") return "1 Month+";
+  return "1-3 Months";
+}
+
+function estimateExpirationFromHorizon(horizon) {
+  return toIsoDate(addDays(new Date(), horizon === "short" ? 21 : horizon === "long" ? 120 : 60));
+}
+
+function riskRulePercent(draft) {
+  const account = Number(draft.accountSize || 1);
+  const budget = Number(draft.riskBudget || 0);
+  return Math.max(0.5, Math.round((budget / account * 100 || 2) * 10) / 10);
 }
 
 function normalizeSymbol(value) {
   return String(value || "").trim().toUpperCase().replace("/", "-");
+}
+
+function recentName(symbol) {
+  const found = localSymbols.find((item) => item.symbol === normalizeSymbol(symbol));
+  return found?.name || `${normalizeSymbol(symbol)} ticker`;
+}
+
+function mockPrice(symbol) {
+  return { AAPL: 197.02, NVDA: 113.5, SPY: 602.1, MSFT: 442.7, QQQ: 531.4, ACHR: 8.26 }[normalizeSymbol(symbol)] || 50;
+}
+
+function mockChange(symbol) {
+  return { AAPL: 0.63, NVDA: 1.1, SPY: 0.24, MSFT: 0.42, QQQ: 0.36, ACHR: -1.8 }[normalizeSymbol(symbol)] || 0.15;
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? new Date(`${value}T00:00:00`) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : stripTime(date);
+}
+
+function displayDate(date) {
+  if (!date) return "Choose date";
+  return `${monthNames[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
+
+function shortDate(value) {
+  const date = parseDate(value);
+  return date ? `${monthNames[date.getMonth()]} ${date.getDate()}` : value;
 }
 
 function buildCalendar(monthDate) {
@@ -995,25 +1362,6 @@ function buildCalendar(monthDate) {
     const date = addDays(start, index);
     return { date, inMonth: date.getMonth() === first.getMonth() };
   });
-}
-
-function parseDate(value) {
-  if (!value) return null;
-  const isoMatch = /^\d{4}-\d{2}-\d{2}$/.test(String(value));
-  const date = isoMatch ? new Date(`${value}T00:00:00`) : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : stripTime(date);
-}
-
-function displayDate(date) {
-  if (!date) return "Choose date";
-  return `${monthNames[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
-}
-
-function toIsoDate(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 function stripTime(date) {
@@ -1034,865 +1382,184 @@ function addMonths(date, months) {
   return new Date(date.getFullYear(), date.getMonth() + months, 1);
 }
 
+function toIsoDate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function dayDiff(start, end) {
-  return Math.round((end.getTime() - start.getTime()) / 86400000);
+  return Math.ceil((stripTime(end).getTime() - stripTime(start).getTime()) / 86400000);
 }
 
-function shortDate(value) {
-  const date = parseDate(value);
-  return date ? `${monthNames[date.getMonth()]} ${date.getDate()}` : value;
+function formatMoney(value) {
+  return `$${Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
-function titleCase(value) {
-  return String(value || "").slice(0, 1).toUpperCase() + String(value || "").slice(1);
-}
-
-function numberFromMoney(value) {
-  return Number(String(value || "").replace(/[^0-9.]/g, "") || 0);
-}
-
-function recentName(symbol) {
-  return {
-    AAPL: "Apple Inc.",
-    MSFT: "Microsoft Corporation",
-    SPY: "SPDR S&P 500 ETF",
-    NVDA: "NVIDIA Corporation",
-    AMZN: "Amazon.com Inc."
-  }[symbol] || `${symbol} ticker`;
+function toneColor(tone) {
+  if (tone === "risk") return palette.red;
+  if (tone === "warn") return "#F59E0B";
+  if (tone === "good") return palette.green;
+  return palette.dark;
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1
-  },
-  snapshot: {
-    backgroundColor: "#FEFFFE"
-  },
-  rowBetween: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12
-  },
-  twoCols: {
-    flexDirection: "row",
-    gap: 16,
-    marginTop: 12
-  },
-  progressTrack: {
-    height: 9,
-    backgroundColor: "#EEF2EF",
-    borderRadius: 999,
-    marginTop: 14,
-    overflow: "hidden"
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: palette.green,
-    borderRadius: 999
-  },
-  progressRisk: {
-    backgroundColor: palette.teal
-  },
-  statusPill: {
-    borderRadius: 999,
-    backgroundColor: palette.greenSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 6
-  },
-  statusPillRisk: {
-    backgroundColor: palette.amberSoft
-  },
-  statusText: {
-    color: palette.green,
-    fontWeight: "900",
-    fontSize: 10
-  },
-  statusTextRisk: {
-    color: palette.teal
-  },
-  bell: {
-    color: palette.dark,
-    fontSize: 20,
-    fontWeight: "900"
-  },
-  choiceCard: {
-    minHeight: 70,
+  flex: { flex: 1 },
+  rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  rowCenter: { flexDirection: "row", alignItems: "center", gap: 10 },
+  snapshot: { backgroundColor: "#FEFFFE" },
+  snapshotGrid: { flexDirection: "row", gap: 12, marginTop: 12 },
+  progressTrack: { height: 8, backgroundColor: "#EEF2EF", borderRadius: 999, overflow: "hidden", marginTop: 12 },
+  progressFill: { height: "100%", backgroundColor: palette.green, borderRadius: 999 },
+  flowChoice: {
+    minHeight: 92,
     borderWidth: 1,
     borderColor: palette.border,
-    borderRadius: 17,
-    padding: 12,
+    borderRadius: 18,
+    padding: 13,
     marginBottom: 10,
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
     backgroundColor: "#FFFFFF"
   },
-  choiceCardActive: {
-    borderColor: palette.green,
-    backgroundColor: "#FBFFFC"
-  },
-  choiceIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: palette.greenSoft
-  },
-  choiceIconActive: {
-    backgroundColor: palette.green
-  },
-  choiceCopy: {
-    flex: 1
-  },
-  choiceTitle: {
-    color: palette.dark,
-    fontSize: 13,
-    fontWeight: "900"
-  },
-  choiceText: {
-    color: palette.muted,
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: "700",
-    marginTop: 3
-  },
-  wizardHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingTop: 10,
-    paddingBottom: 12
-  },
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: palette.border
-  },
-  wizardTitle: {
-    color: palette.dark,
-    fontSize: 16,
-    fontWeight: "900"
-  },
-  wizardSub: {
-    color: palette.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    marginTop: 2
-  },
-  stepTrack: {
-    flexDirection: "row",
-    gap: 7,
-    marginBottom: 12,
-    paddingHorizontal: 4
-  },
-  stepDot: {
-    flex: 1,
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: "#E4EAE4"
-  },
-  stepDotActive: {
-    backgroundColor: palette.green
-  },
-  stepCard: {
-    paddingVertical: 10,
-    marginBottom: 9
-  },
-  stepHeader: {
-    minHeight: 34,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10
-  },
-  stepTitleWrap: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6
-  },
-  stepNumber: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "900"
-  },
-  stepTitle: {
-    color: palette.dark,
-    fontSize: 13,
-    fontWeight: "900"
-  },
-  stepRight: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6
-  },
-  stepBody: {
-    marginTop: 10
-  },
-  inputRow: {
-    flexDirection: "row",
-    gap: 10,
-    alignItems: "flex-start"
-  },
-  fieldWrap: {
-    flex: 1,
-    minWidth: 0,
-    marginBottom: 10,
-    position: "relative"
-  },
-  inputLabel: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "800",
-    marginBottom: 5
-  },
-  searchBox: {
-    minHeight: 45,
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "#FBFCFB"
-  },
-  searchInput: {
-    flex: 1,
-    color: palette.dark,
-    fontWeight: "900",
-    outlineStyle: "none"
-  },
-  fieldError: {
-    borderColor: palette.red,
-    backgroundColor: "#FFFBFB"
-  },
-  fieldErrorText: {
-    color: palette.red,
-    fontSize: 10,
-    fontWeight: "800",
-    marginTop: 5
-  },
-  dropdown: {
-    marginTop: 7,
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF",
-    overflow: "hidden"
-  },
-  dropdownEmpty: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "800",
-    padding: 12
-  },
-  tickerOption: {
-    minHeight: 54,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#F0F3F0"
-  },
-  tickerLogo: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: palette.greenSoft,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  tickerLogoText: {
-    color: palette.green,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  tickerCopy: {
-    flex: 1
-  },
-  tickerSymbol: {
-    color: palette.dark,
-    fontSize: 13,
-    fontWeight: "900"
-  },
-  tickerName: {
-    color: palette.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    marginTop: 2
-  },
-  exchangeText: {
-    color: palette.muted,
-    fontSize: 9,
-    fontWeight: "900"
-  },
-  selectedTickerCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    marginTop: 7,
-    borderRadius: 12,
-    backgroundColor: palette.greenSoft,
-    paddingHorizontal: 10,
-    paddingVertical: 8
-  },
-  selectedTickerSymbol: {
-    color: palette.green,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  selectedTickerName: {
-    flex: 1,
-    color: palette.dark,
-    fontSize: 11,
-    fontWeight: "800"
-  },
-  recentWrap: {
-    marginTop: 2
-  },
-  miniLabel: {
-    color: palette.muted,
-    fontSize: 9,
-    fontWeight: "900",
-    marginBottom: 7
-  },
-  recentRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 7
-  },
-  recentChip: {
-    borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 8,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: palette.border
-  },
-  recentText: {
-    color: palette.dark,
-    fontSize: 10,
-    fontWeight: "900"
-  },
-  contextBox: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: "rgba(207,239,216,0.9)",
-    backgroundColor: "#FBFFFC",
-    padding: 12
-  },
-  contextTitle: {
-    color: palette.dark,
-    fontSize: 13,
-    fontWeight: "900"
-  },
-  contextSub: {
-    color: palette.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    marginTop: 2
-  },
-  priceBadge: {
-    borderRadius: 15,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: palette.border,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    alignItems: "flex-end"
-  },
-  priceText: {
-    color: palette.dark,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  contextChips: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-    marginTop: 7
-  },
-  contextChip: {
-    color: palette.green,
-    backgroundColor: palette.greenSoft,
-    borderRadius: 999,
-    overflow: "hidden",
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    fontSize: 9,
-    fontWeight: "900"
-  },
-  emptyHint: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "800",
-    lineHeight: 17
-  },
-  segmentRow: {
-    flexDirection: "row",
-    gap: 8,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: "#FBFCFB",
-    padding: 4
-  },
-  segmentButton: {
-    flex: 1,
-    minHeight: 34,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  segmentButtonActive: {
-    backgroundColor: palette.green
-  },
-  segmentText: {
-    color: palette.muted,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  segmentTextActive: {
-    color: "#FFFFFF"
-  },
-  expirationStrip: {
-    borderRadius: 16,
-    backgroundColor: "#F8FCF8",
-    borderWidth: 1,
-    borderColor: "#E1ECE2",
-    padding: 10,
-    marginBottom: 10
-  },
-  expirationChips: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 7
-  },
-  expirationChip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 10,
-    paddingVertical: 7
-  },
-  expirationChipActive: {
-    backgroundColor: palette.green,
-    borderColor: palette.green
-  },
-  expirationChipText: {
-    color: palette.dark,
-    fontSize: 10,
-    fontWeight: "900"
-  },
-  expirationChipTextActive: {
-    color: "#FFFFFF"
-  },
-  dateButton: {
-    minHeight: 49,
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: 14,
-    paddingHorizontal: 11,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    backgroundColor: "#FBFCFB"
-  },
-  dateText: {
-    color: palette.dark,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  dateSub: {
-    color: palette.muted,
-    fontSize: 9,
-    fontWeight: "800",
-    marginTop: 3
-  },
-  calendarPanel: {
-    width: 238,
-    borderWidth: 1,
-    borderColor: palette.border,
-    borderRadius: 16,
-    backgroundColor: "#FFFFFF",
-    padding: 8,
-    marginTop: 8,
-    alignSelf: "flex-end",
-    shadowColor: "#16351D",
-    shadowOpacity: 0.12,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 }
-  },
-  calendarHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 7
-  },
-  calendarNav: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 1,
-    borderColor: palette.border,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  calendarTitle: {
-    color: palette.dark,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  weekRow: {
-    flexDirection: "row",
-    marginBottom: 4
-  },
-  weekLabel: {
-    width: `${100 / 7}%`,
-    textAlign: "center",
-    color: palette.muted,
-    fontSize: 8,
-    fontWeight: "900"
-  },
-  daysGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap"
-  },
-  dayCell: {
-    width: `${100 / 7}%`,
-    height: 24,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: 9
-  },
-  dayCellSelected: {
-    backgroundColor: palette.green
-  },
-  dayCellDisabled: {
-    opacity: 0.25
-  },
-  dayText: {
-    color: palette.dark,
-    fontSize: 9,
-    fontWeight: "900"
-  },
-  dayTextSelected: {
-    color: "#FFFFFF"
-  },
-  dayTextDisabled: {
-    color: palette.muted
-  },
-  sizingStrip: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 10
-  },
-  sizingItem: {
-    flex: 1,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: "#FBFDFB",
-    padding: 10
-  },
-  sizingValue: {
-    color: palette.dark,
-    fontSize: 13,
-    fontWeight: "900"
-  },
-  warningCard: {
-    backgroundColor: "#F6FCFF",
-    borderColor: "#CFEFFF"
-  },
-  warningTitle: {
-    color: palette.dark,
-    fontSize: 13,
-    fontWeight: "900",
-    marginBottom: 8
-  },
-  warningRow: {
-    flexDirection: "row",
-    gap: 8,
-    alignItems: "flex-start",
-    marginBottom: 6
-  },
-  warningText: {
-    flex: 1,
-    color: palette.dark,
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: "800"
-  },
-  summaryHero: {
-    backgroundColor: "#F7FFF9",
-    borderColor: "#CFEFD8"
-  },
-  heroTicker: {
-    color: palette.dark,
-    fontSize: 22,
-    fontWeight: "900"
-  },
-  heroSub: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "800",
-    marginTop: 3
-  },
-  convictionBox: {
-    marginTop: 12,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#E1ECE2",
-    backgroundColor: "#FFFFFF",
-    padding: 12,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between"
-  },
-  convictionTitle: {
-    color: palette.dark,
-    fontSize: 14,
-    fontWeight: "900"
-  },
-  convictionSub: {
-    color: palette.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    marginTop: 2
-  },
-  signalDot: {
-    width: 13,
-    height: 13,
-    borderRadius: 7,
-    backgroundColor: palette.amber
-  },
-  summaryGrid: {
-    flexDirection: "row",
-    gap: 8,
-    marginTop: 12
-  },
-  summaryMini: {
-    flex: 1,
-    borderRadius: 15,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E6EFE7",
-    padding: 10,
-    alignItems: "center"
-  },
-  summaryMiniLabel: {
-    color: palette.muted,
-    fontSize: 9,
-    fontWeight: "900",
-    marginTop: 5
-  },
-  summaryMiniValue: {
-    color: palette.green,
-    fontSize: 10,
-    fontWeight: "900",
-    marginTop: 3,
-    textAlign: "center"
-  },
-  smallSub: {
-    color: palette.muted,
-    fontSize: 10,
-    fontWeight: "800",
-    marginTop: -6,
-    marginBottom: 8
-  },
-  issueRow: {
-    minHeight: 52,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    borderTopWidth: 1,
-    borderTopColor: "#EEF2EF",
-    paddingVertical: 9
-  },
-  issueIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: palette.greenSoft,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  issueIconRisk: {
-    backgroundColor: "#FEEEEE"
-  },
-  issueIconWarn: {
-    backgroundColor: "#FFF7E6"
-  },
-  issueTitle: {
-    color: palette.dark,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  issueSub: {
-    color: palette.muted,
-    fontSize: 9,
-    fontWeight: "800",
-    marginTop: 2
-  },
-  issueBadge: {
-    color: palette.green,
-    backgroundColor: palette.greenSoft,
-    borderRadius: 999,
-    overflow: "hidden",
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    fontSize: 8,
-    fontWeight: "900"
-  },
-  issueBadgeRisk: {
-    color: palette.red,
-    backgroundColor: "#FEEEEE"
-  },
-  issueBadgeWarn: {
-    color: palette.amber,
-    backgroundColor: "#FFF7E6"
-  },
-  debateButton: {
-    marginTop: 10
-  },
-  levelRow: {
-    flexDirection: "row",
-    gap: 8,
-    marginBottom: 12
-  },
-  levelChip: {
-    flex: 1,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
-    paddingVertical: 9,
-    alignItems: "center"
-  },
-  levelChipActive: {
-    backgroundColor: palette.green,
-    borderColor: palette.green
-  },
-  levelText: {
-    color: palette.dark,
-    fontSize: 10,
-    fontWeight: "900"
-  },
-  levelTextActive: {
-    color: "#FFFFFF"
-  },
-  liveBadge: {
-    borderRadius: 999,
-    backgroundColor: "#FEEEEE",
-    paddingHorizontal: 9,
-    paddingVertical: 5
-  },
-  liveText: {
-    color: palette.red,
-    fontSize: 9,
-    fontWeight: "900"
-  },
-  debateRow: {
-    flexDirection: "row",
-    gap: 10,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#EEF2EF"
-  },
-  agentAvatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  agentInitial: {
-    color: palette.green,
-    fontSize: 10,
-    fontWeight: "900"
-  },
-  agentName: {
-    color: palette.dark,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  agentTime: {
-    color: palette.muted,
-    fontSize: 8,
-    fontWeight: "800"
-  },
-  agentPoint: {
-    color: palette.dark,
-    fontSize: 10,
-    lineHeight: 15,
-    fontWeight: "800",
-    marginTop: 4
-  },
-  deepDiveCard: {
-    backgroundColor: "#FFFFFF"
-  },
-  scoreText: {
-    color: palette.green,
-    fontSize: 16,
-    fontWeight: "900"
-  },
-  deepStatus: {
-    color: palette.red,
-    fontSize: 10,
-    fontWeight: "900",
-    textTransform: "uppercase"
-  },
-  deepSub: {
-    color: palette.dark,
-    fontSize: 12,
-    fontWeight: "900",
-    marginTop: 4
-  },
-  deepScore: {
-    color: palette.green,
-    fontSize: 34,
-    fontWeight: "900"
-  },
-  block: {
-    borderTopWidth: 1,
-    borderTopColor: "#EEF2EF",
-    paddingTop: 12,
-    marginTop: 12
-  },
-  blockTitle: {
-    color: palette.green,
-    fontSize: 11,
-    fontWeight: "900",
-    marginBottom: 7
-  },
-  blockText: {
-    color: palette.dark,
-    fontSize: 11,
-    lineHeight: 17,
-    fontWeight: "800",
-    marginBottom: 4
-  },
-  nextQuestion: {
-    borderRadius: 16,
-    backgroundColor: "#F7FFF9",
-    borderWidth: 1,
-    borderColor: "#CFEFD8",
-    padding: 12,
-    marginTop: 14
-  },
-  riskText: {
-    color: palette.red
-  },
-  warnText: {
-    color: palette.amber
-  }
+  flowIcon: { width: 42, height: 42, borderRadius: 21, alignItems: "center", justifyContent: "center" },
+  flowTitle: { color: palette.dark, fontSize: 14, fontWeight: "900" },
+  flowSubtitle: { color: palette.dark, fontSize: 11, lineHeight: 15, fontWeight: "800", marginTop: 3 },
+  flowBody: { color: palette.muted, fontSize: 10, lineHeight: 14, fontWeight: "700", marginTop: 5 },
+  topBar: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingTop: 8, paddingBottom: 14 },
+  topCenter: { alignItems: "center", flex: 1 },
+  roundButton: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: palette.border },
+  roundButtonGhost: { width: 38, height: 38 },
+  stepCount: { color: palette.dark, fontSize: 10, fontWeight: "900", marginBottom: 5 },
+  flowHeading: { color: palette.dark, fontSize: 14, fontWeight: "900" },
+  stepTitleBlock: { alignItems: "center", marginBottom: 16 },
+  screenTitle: { color: palette.dark, fontSize: 18, fontWeight: "900", textAlign: "center" },
+  screenSubtitle: { color: palette.muted, fontSize: 11, lineHeight: 16, fontWeight: "700", textAlign: "center", marginTop: 5 },
+  searchWrap: { position: "relative", zIndex: 5, marginBottom: 12 },
+  searchBox: { minHeight: 48, borderWidth: 1, borderColor: palette.border, borderRadius: 14, backgroundColor: "#FBFCFB", flexDirection: "row", alignItems: "center", gap: 9, paddingHorizontal: 12 },
+  searchInput: { flex: 1, color: palette.dark, fontWeight: "800", outlineStyle: "none" },
+  searchResults: { borderWidth: 1, borderColor: palette.border, borderRadius: 16, backgroundColor: "#FFFFFF", overflow: "hidden", marginTop: 8 },
+  dropdownEmpty: { color: palette.muted, fontSize: 11, fontWeight: "800", padding: 12 },
+  resultRow: { minHeight: 54, flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 12, borderTopWidth: 1, borderTopColor: "#F0F3F0" },
+  symbolAvatar: { width: 31, height: 31, borderRadius: 16, backgroundColor: palette.greenSoft, alignItems: "center", justifyContent: "center" },
+  symbolAvatarText: { color: palette.green, fontSize: 12, fontWeight: "900" },
+  resultSymbol: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  resultName: { color: palette.muted, fontSize: 10, fontWeight: "800", marginTop: 2 },
+  resultExchange: { color: palette.muted, fontSize: 9, fontWeight: "900" },
+  miniLabel: { color: palette.muted, fontSize: 10, fontWeight: "900", marginBottom: 8 },
+  chipRow: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
+  chip: { borderRadius: 999, borderWidth: 1, borderColor: palette.border, paddingHorizontal: 13, paddingVertical: 8, backgroundColor: "#FFFFFF" },
+  chipText: { color: palette.dark, fontSize: 10, fontWeight: "900" },
+  tickerCard: { flexDirection: "row", alignItems: "center", gap: 12, marginTop: 4 },
+  symbolLogo: { width: 38, height: 38, borderRadius: 19, backgroundColor: "#101828", alignItems: "center", justifyContent: "center" },
+  symbolLogoText: { color: "#FFFFFF", fontSize: 15, fontWeight: "900" },
+  bigSymbol: { color: palette.dark, fontSize: 18, fontWeight: "900" },
+  priceBox: { alignItems: "flex-end" },
+  priceText: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  changeText: { color: palette.green, fontSize: 10, fontWeight: "900", marginTop: 3 },
+  selectable: { minHeight: 70, borderWidth: 1, borderColor: palette.border, borderRadius: 16, backgroundColor: "#FFFFFF", padding: 13, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 },
+  selectableActive: { borderColor: palette.green, backgroundColor: "#F4FFF7" },
+  radio: { width: 26, height: 26, borderRadius: 13, borderWidth: 1, borderColor: palette.border, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" },
+  radioActive: { backgroundColor: palette.green, borderColor: palette.green },
+  selectableTitle: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  selectableSubtitle: { color: palette.muted, fontSize: 10, lineHeight: 15, fontWeight: "700", marginTop: 2 },
+  dateSelector: { minHeight: 58, borderRadius: 16, borderWidth: 1, borderColor: palette.border, paddingHorizontal: 13, backgroundColor: "#FFFFFF", flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  dateText: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  dateSub: { color: palette.muted, fontSize: 10, fontWeight: "800", marginTop: 2 },
+  suggestedDates: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 10 },
+  dateChip: { borderRadius: 999, borderWidth: 1, borderColor: palette.border, paddingHorizontal: 11, paddingVertical: 7, backgroundColor: "#FFFFFF" },
+  dateChipActive: { backgroundColor: palette.green, borderColor: palette.green },
+  dateChipText: { color: palette.dark, fontSize: 10, fontWeight: "900" },
+  dateChipTextActive: { color: "#FFFFFF" },
+  calendarCard: { padding: 10 },
+  calendarHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 },
+  calendarNav: { width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: palette.border, alignItems: "center", justifyContent: "center" },
+  calendarTitle: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  weekRow: { flexDirection: "row", marginBottom: 5 },
+  weekLabel: { width: `${100 / 7}%`, textAlign: "center", color: palette.muted, fontSize: 9, fontWeight: "900" },
+  daysGrid: { flexDirection: "row", flexWrap: "wrap" },
+  dayCell: { width: `${100 / 7}%`, height: 31, alignItems: "center", justifyContent: "center", borderRadius: 12 },
+  dayCellActive: { backgroundColor: palette.green },
+  dayCellDisabled: { opacity: 0.25 },
+  dayText: { color: palette.dark, fontSize: 10, fontWeight: "900" },
+  dayTextActive: { color: "#FFFFFF" },
+  fieldRow: { minHeight: 54, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: 1, borderBottomColor: "#EEF2EF", paddingVertical: 8 },
+  fieldLabel: { color: palette.muted, fontSize: 11, fontWeight: "900" },
+  compactInput: { width: 150, minHeight: 38, borderRadius: 12, borderWidth: 1, borderColor: palette.border, backgroundColor: "#FBFCFB", flexDirection: "row", alignItems: "center", paddingHorizontal: 9 },
+  inputError: { borderColor: palette.red, backgroundColor: "#FFFBFB" },
+  compactTextInput: { flex: 1, color: palette.dark, textAlign: "right", fontWeight: "900", outlineStyle: "none" },
+  inputAdornment: { color: palette.muted, fontSize: 11, fontWeight: "900" },
+  errorText: { color: palette.red, fontSize: 9, fontWeight: "800", marginTop: 3 },
+  helperText: { color: palette.muted, fontSize: 10, lineHeight: 15, fontWeight: "700", marginVertical: 9 },
+  stepperRow: { minHeight: 62, flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 8 },
+  stepper: { flexDirection: "row", alignItems: "center", borderRadius: 14, borderWidth: 1, borderColor: palette.border, overflow: "hidden", backgroundColor: "#FFFFFF" },
+  stepperButton: { width: 42, height: 40, alignItems: "center", justifyContent: "center", backgroundColor: "#F7FBF8" },
+  stepperText: { color: palette.green, fontSize: 18, fontWeight: "900" },
+  stepperInput: { width: 44, height: 40, color: palette.dark, textAlign: "center", fontWeight: "900", outlineStyle: "none" },
+  mathCard: { backgroundColor: "#FBFFFC", borderColor: "#CFEFD8" },
+  metricGrid: { flexDirection: "row", flexWrap: "wrap", gap: 9, marginBottom: 10 },
+  metricCard: { width: "48%", marginBottom: 0, padding: 12 },
+  metricValue: { fontSize: 17, fontWeight: "900" },
+  miniStat: { flex: 1 },
+  miniStatValue: { color: palette.dark, fontSize: 17, fontWeight: "900" },
+  pill: { borderRadius: 999, borderWidth: 1, borderColor: palette.border, backgroundColor: "#FFFFFF", paddingHorizontal: 10, paddingVertical: 6, alignSelf: "flex-start" },
+  pillGood: { backgroundColor: palette.greenSoft, borderColor: "#CFEFD8" },
+  pillWarn: { backgroundColor: "#FFF8E8", borderColor: "#FADFA2" },
+  pillRisk: { backgroundColor: "#FFF1F1", borderColor: "#F8CACA" },
+  pillText: { color: palette.dark, fontSize: 9, fontWeight: "900" },
+  pillTextGood: { color: palette.green },
+  pillTextWarn: { color: "#B7791F" },
+  pillTextRisk: { color: palette.red },
+  tipCard: { backgroundColor: "#FBFFFC" },
+  tipRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 7 },
+  tipText: { flex: 1, color: palette.dark, fontSize: 11, lineHeight: 16, fontWeight: "800" },
+  strategyCard: { padding: 14 },
+  strategyName: { color: palette.dark, fontSize: 14, fontWeight: "900" },
+  strategyWhy: { color: palette.muted, fontSize: 10, lineHeight: 15, fontWeight: "700", marginTop: 4, maxWidth: 250 },
+  strategyFacts: { flexDirection: "row", gap: 12, marginVertical: 12 },
+  uploadBox: { minHeight: 185, borderRadius: 18, borderWidth: 1, borderColor: "#CBB9FF", borderStyle: "dashed", backgroundColor: "#FBF9FF", alignItems: "center", justifyContent: "center", marginBottom: 14 },
+  uploadIcon: { width: 58, height: 58, borderRadius: 29, backgroundColor: "#EFE7FF", alignItems: "center", justifyContent: "center" },
+  uploadTitle: { color: palette.dark, fontSize: 14, fontWeight: "900", marginTop: 12 },
+  uploadSub: { color: palette.muted, fontSize: 10, fontWeight: "800", marginTop: 4 },
+  platformChip: { borderRadius: 999, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: palette.border, paddingHorizontal: 9, paddingVertical: 6 },
+  platformText: { color: palette.dark, fontSize: 9, fontWeight: "900" },
+  extractCard: { alignItems: "center" },
+  progressRing: { width: 82, height: 82, borderRadius: 41, borderWidth: 7, borderColor: "#CBB9FF", alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  extractTitle: { color: palette.dark, fontSize: 13, fontWeight: "900", marginBottom: 12 },
+  secondaryButton: { minHeight: 48, borderRadius: 15, borderWidth: 1, borderColor: palette.green, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF", marginBottom: 8 },
+  secondaryButtonText: { color: palette.green, fontWeight: "900" },
+  keyValue: { flexDirection: "row", justifyContent: "space-between", gap: 12, borderBottomWidth: 1, borderBottomColor: "#EEF2EF", paddingVertical: 10 },
+  keyValueText: { color: palette.dark, fontSize: 12, fontWeight: "900", textAlign: "right", flex: 1 },
+  successCard: { backgroundColor: "#F2FFF6", borderColor: "#CFEFD8" },
+  successText: { color: palette.dark, fontSize: 11, lineHeight: 16, fontWeight: "800", textAlign: "center" },
+  timelineRow: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 36 },
+  timelineDot: { width: 12, height: 12, borderRadius: 6, borderWidth: 1, borderColor: palette.border, backgroundColor: "#FFFFFF" },
+  timelineDotActive: { backgroundColor: palette.green, borderColor: palette.green },
+  heroCard: { backgroundColor: "#F7FFF9", borderColor: "#CFEFD8" },
+  heroTitle: { color: palette.dark, fontSize: 21, fontWeight: "900" },
+  heroSub: { color: palette.muted, fontSize: 11, fontWeight: "800", marginTop: 3 },
+  scoreCircle: { width: 76, height: 76, borderRadius: 38, borderWidth: 7, borderColor: palette.green, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" },
+  scoreValue: { color: palette.dark, fontSize: 20, fontWeight: "900" },
+  scoreOutOf: { color: palette.muted, fontSize: 9, fontWeight: "900" },
+  verdictBox: { minHeight: 62, marginTop: 14, borderRadius: 16, borderWidth: 1, borderColor: "#DDEBDD", backgroundColor: "#FFFFFF", padding: 12, flexDirection: "row", alignItems: "center", gap: 11 },
+  statusDot: { width: 13, height: 13, borderRadius: 7 },
+  verdictTitle: { color: palette.dark, fontSize: 14, fontWeight: "900" },
+  verdictSub: { color: palette.muted, fontSize: 10, fontWeight: "800", marginTop: 2 },
+  issueRow: { minHeight: 58, flexDirection: "row", alignItems: "center", gap: 10, borderTopWidth: 1, borderTopColor: "#EEF2EF", paddingVertical: 9 },
+  issueIcon: { width: 32, height: 32, borderRadius: 16, backgroundColor: palette.greenSoft, alignItems: "center", justifyContent: "center" },
+  issueIconWarn: { backgroundColor: "#FFF7E6" },
+  issueIconRisk: { backgroundColor: "#FEEEEE" },
+  issueTitle: { color: palette.dark, fontSize: 12, fontWeight: "900" },
+  issueSub: { color: palette.muted, fontSize: 9, lineHeight: 13, fontWeight: "800", marginTop: 2 },
+  debateEntry: { minHeight: 70, borderRadius: 18, borderWidth: 1, borderColor: "#CFEFD8", backgroundColor: "#FFFFFF", padding: 14, marginBottom: 12, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  levelRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
+  agentRow: { flexDirection: "row", gap: 10, paddingVertical: 12, borderTopWidth: 1, borderTopColor: "#EEF2EF" },
+  agentAvatar: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  agentInitials: { color: palette.green, fontSize: 10, fontWeight: "900" },
+  agentName: { color: palette.dark, fontSize: 12, fontWeight: "900" },
+  agentText: { color: palette.dark, fontSize: 10, lineHeight: 15, fontWeight: "800", marginTop: 4 },
+  deepScore: { fontSize: 22, fontWeight: "900" },
+  block: { borderTopWidth: 1, borderTopColor: "#EEF2EF", paddingTop: 12, marginTop: 12 },
+  blockTitle: { color: palette.green, fontSize: 11, fontWeight: "900", marginBottom: 7 },
+  blockText: { color: palette.dark, fontSize: 11, lineHeight: 17, fontWeight: "800", marginBottom: 4 },
+  nextQuestion: { borderRadius: 16, backgroundColor: "#F7FFF9", borderWidth: 1, borderColor: "#CFEFD8", padding: 12, marginTop: 14 }
 });
