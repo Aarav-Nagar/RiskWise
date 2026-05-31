@@ -1,651 +1,691 @@
 import React from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { Card } from "../components/Card";
 import { ScreenScroll } from "../components/Shared";
 import { palette } from "../theme/theme";
 
-const sectionDefaults = {
-  memory: false,
-  rules: false,
-  style: false,
-  context: false,
-  preferences: false,
-  security: false
+const defaultProfile = {
+  decisionQuality: {
+    overall: 84,
+    signalDiscipline: 81,
+    positionSizing: 90,
+    volatilityAwareness: 74,
+    patience: 86
+  },
+  learnedInsights: {
+    commonMistakes: [
+      "Entering before confirmation",
+      "Position sizing too large",
+      "Chasing momentum",
+      "Trading very short expirations",
+      "No clear exit plan"
+    ],
+    strongHabits: [
+      "Uses defined risk consistently",
+      "Reviews before entering trades",
+      "Considers volatility context",
+      "Plans exits in advance"
+    ]
+  },
+  analysisSources: {
+    savedChecks: { enabled: true, count: 46 },
+    chatHistory: { enabled: true, count: 128 },
+    uploadedScreenshots: { enabled: true, count: 12 },
+    watchlist: { enabled: true, count: 24 }
+  }
 };
 
-const sectorOptions = ["Tech", "Healthcare", "Finance", "Energy", "Consumer", "Indexes"];
-const mistakeOptions = ["Oversizing", "Chasing", "Ignoring IV", "Short expiry", "No exit plan"];
-
 export function ProfileScreen({ user, onSignOut, onUpdateUser, onDeleteAccount }) {
-  const [openSections, setOpenSections] = React.useState(sectionDefaults);
-  const [saveState, setSaveState] = React.useState("Synced");
-  const userMemory = user?.aiMemory || {};
-  const userRules = user?.riskRules || {};
-  const userCoachStyle = user?.coachStyle || {};
-  const userSavedContext = user?.savedContext || {};
-  const userAppPreferences = user?.appPreferences || {};
-  const [memory, setMemory] = React.useState({
-    experienceLevel: userMemory.experienceLevel || user?.experienceLevel || "Learning",
-    riskStyle: userMemory.riskStyle || user?.riskStyle || "Balanced",
-    explanationStyle: userMemory.explanationStyle || "Plain English",
-    sectors: Array.isArray(userMemory.sectors) ? userMemory.sectors : Array.isArray(user?.sectors) ? user.sectors : ["Tech", "Finance"],
-    mistakes: Array.isArray(userMemory.mistakes) ? userMemory.mistakes : Array.isArray(user?.struggles) ? user.struggles : ["Oversizing", "Chasing"]
-  });
-  const [rules, setRules] = React.useState({
-    maxRiskPerTrade: userRules.maxRiskPerTrade || user?.maxRiskPerTrade || "2%",
-    maxTradesPerWeek: userRules.maxTradesPerWeek || user?.maxTradesPerWeek || "5",
-    avoidEarnings: Boolean(userRules.avoidEarnings || user?.avoidEarningsTrades),
-    warnShortExpiry: userRules.warnShortExpiry !== false,
-    warnPremiumRisk: userRules.warnPremiumRisk !== false,
-    premiumRiskLimit: userRules.premiumRiskLimit || "5%"
-  });
-  const [coachStyle, setCoachStyle] = React.useState({
-    simple: userCoachStyle.simple !== false,
-    quantHeavy: Boolean(userCoachStyle.quantHeavy),
-    debateBothSides: userCoachStyle.debateBothSides !== false,
-    askQuestionsFirst: Boolean(userCoachStyle.askQuestionsFirst),
-    strictRisk: userCoachStyle.strictRisk !== false
-  });
-  const [savedContext, setSavedContext] = React.useState({
-    savedChecks: userSavedContext.savedChecks !== false,
-    chatHistory: userSavedContext.chatHistory !== false,
-    uploadedScreenshots: userSavedContext.uploadedScreenshots !== false,
-    watchlist: userSavedContext.watchlist !== false
-  });
-  const [appPreferences, setAppPreferences] = React.useState({
-    defaultMode: userAppPreferences.defaultMode || "Review",
-    defaultTab: userAppPreferences.defaultTab || "Coach",
-    compactReports: userAppPreferences.compactReports !== false,
-    weeklyDigest: Boolean(userAppPreferences.weeklyDigest),
-    quietHours: userAppPreferences.quietHours || "After 9 PM"
-  });
-  const [deleteArmed, setDeleteArmed] = React.useState(false);
-  const [deleteText, setDeleteText] = React.useState("");
-  const [securityStatus, setSecurityStatus] = React.useState("");
+  const [notice, setNotice] = React.useState("");
+  const [confirmAction, setConfirmAction] = React.useState(null);
+  const [saving, setSaving] = React.useState("");
+  const [appPreferences, setAppPreferences] = React.useState(() => ({
+    defaultMode: user?.appPreferences?.defaultMode || "Review",
+    openAppTo: user?.appPreferences?.defaultTab || user?.appPreferences?.openAppTo || "Coach",
+    compactReports: user?.appPreferences?.compactReports !== false,
+    weeklyDigest: user?.appPreferences?.weeklyDigest !== false,
+    quietHours: user?.appPreferences?.quietHours || "After 9 PM"
+  }));
+  const [riskRules] = React.useState(() => ({
+    maxRiskPerTradePercent: numberFromPercent(user?.riskRules?.maxRiskPerTrade || user?.riskRules?.maxRiskPerTradePercent || user?.maxRiskPerTrade || 2),
+    maxTradesPerWeek: user?.riskRules?.maxTradesPerWeek || user?.maxTradesPerWeek || 5,
+    avoidEarningsTrades: user?.riskRules?.avoidEarnings ?? user?.avoidEarningsTrades ?? true,
+    warnShortExpiration: user?.riskRules?.warnShortExpiry ?? true,
+    shortExpirationDays: 7,
+    premiumRiskWarningLevelPercent: numberFromPercent(user?.riskRules?.premiumRiskLimit || 5),
+    lastUpdated: "May 24, 2026"
+  }));
+  const [memory] = React.useState(() => ({
+    experience: user?.aiMemory?.experienceLevel || user?.experienceLevel || "Some experience",
+    riskStyle: user?.aiMemory?.riskStyle || user?.riskStyle || "Balanced",
+    preferredExplanation: user?.aiMemory?.explanationStyle || "Step-by-step",
+    sectorsToFocus: normalizeList(user?.aiMemory?.sectors || user?.sectors, ["Technology", "Healthcare", "Finance", "Energy"]),
+    commonMistakes: normalizeList(user?.aiMemory?.mistakes || user?.struggles, ["Oversizing", "Chasing", "Ignoring IV", "Short expiry", "No exit plan"])
+  }));
+  const [coachPreferences] = React.useState(() => ({
+    defaultAIMode: appPreferences.defaultMode,
+    explanationStyle: memory.preferredExplanation,
+    coachingApproach: user?.coachStyle?.debateBothSides === false ? "Direct answer first" : "Debate both sides",
+    questionStyle: user?.coachStyle?.askQuestionsFirst ? "Ask me questions first" : "Ask me questions first",
+    riskStrictness: user?.coachStyle?.strictRisk === false ? "Balanced risk tone" : "Strict about risk"
+  }));
+  const [analysisSources, setAnalysisSources] = React.useState(defaultProfile.analysisSources);
 
   const initials = getInitials(user?.name);
-  const firstName = (user?.name || "RiskWise User").split(" ")[0];
+  const firstName = firstNameOf(user?.name);
+  const email = user?.email || "aarav.nagar22@gmail.com";
+  const identity = `${memory.riskStyle} Trader`;
+  const synced = saving || "Synced";
 
-  function toggle(section) {
-    setOpenSections((current) => ({ ...current, [section]: !current[section] }));
-  }
-
-  async function persist(updates) {
-    if (!onUpdateUser) {
-      return;
-    }
-    setSaveState("Saving");
-    try {
-      await onUpdateUser(updates);
-      setSaveState("Saved");
-    } catch (error) {
-      setSaveState("Offline");
-    }
-  }
-
-  function commitMemory(next) {
-    setMemory(next);
-    persist({
-      experienceLevel: next.experienceLevel,
-      riskStyle: next.riskStyle,
-      sectors: next.sectors,
-      struggles: next.mistakes,
-      aiMemory: next
-    });
-  }
-
-  function commitRules(next) {
-    setRules(next);
-    persist({ riskRules: next });
-  }
-
-  function commitCoachStyle(next) {
-    setCoachStyle(next);
-    persist({ coachStyle: next });
-  }
-
-  function commitSavedContext(next) {
-    setSavedContext(next);
-    persist({ savedContext: next });
-  }
-
-  function commitAppPreferences(next) {
+  async function persistAppPreferences(next) {
     setAppPreferences(next);
-    persist({ appPreferences: next });
-  }
-
-  function setMemoryValue(key, value) {
-    commitMemory({ ...memory, [key]: value });
-  }
-
-  function setRuleValue(key, value) {
-    commitRules({ ...rules, [key]: value });
-  }
-
-  function setCoachValue(key, value) {
-    commitCoachStyle({ ...coachStyle, [key]: value });
-  }
-
-  function setContextValue(key, value) {
-    commitSavedContext({ ...savedContext, [key]: value });
-  }
-
-  function setPreferenceValue(key, value) {
-    commitAppPreferences({ ...appPreferences, [key]: value });
-  }
-
-  function toggleTag(key, value) {
-    const currentValues = Array.isArray(memory[key]) ? memory[key] : [];
-    const exists = currentValues.includes(value);
-    commitMemory({
-      ...memory,
-      [key]: exists ? currentValues.filter((item) => item !== value) : [...currentValues, value]
-    });
-  }
-
-  function clearContext() {
-    commitSavedContext({
-      savedChecks: false,
-      chatHistory: false,
-      uploadedScreenshots: false,
-      watchlist: false
-    });
-  }
-
-  async function confirmDeleteAccount() {
-    if (!deleteArmed) {
-      setDeleteArmed(true);
-      setSecurityStatus("Type DELETE to remove RiskWise app data and sign out.");
-      return;
-    }
-    if (deleteText.trim().toUpperCase() !== "DELETE") {
-      setSecurityStatus("Type DELETE exactly to confirm.");
-      return;
-    }
+    setSaving("Saving");
     try {
-      setSecurityStatus("Deleting account data...");
+      await onUpdateUser?.({ appPreferences: { ...next, defaultTab: next.openAppTo } });
+      setSaving("Saved");
+    } catch {
+      setSaving("Offline");
+    }
+  }
+
+  async function clearAllContext() {
+    const next = {
+      savedChecks: { enabled: false, count: 0 },
+      chatHistory: { enabled: false, count: 0 },
+      uploadedScreenshots: { enabled: false, count: 0 },
+      watchlist: { enabled: false, count: 0 }
+    };
+    setAnalysisSources(next);
+    setConfirmAction(null);
+    setNotice("Context cleared for this session.");
+    try {
+      await onUpdateUser?.({
+        savedContext: {
+          savedChecks: false,
+          chatHistory: false,
+          uploadedScreenshots: false,
+          watchlist: false
+        }
+      });
+    } catch {
+      setNotice("Context cleared locally. Cloud sync is unavailable right now.");
+    }
+  }
+
+  async function confirmSignOut() {
+    setConfirmAction(null);
+    await onSignOut?.();
+  }
+
+  async function confirmDelete() {
+    setConfirmAction(null);
+    setNotice("Deleting account data...");
+    try {
       await onDeleteAccount?.();
     } catch (error) {
-      setSecurityStatus(error.message || "Could not delete account data right now.");
+      setNotice(error.message || "Could not delete account data right now.");
     }
   }
 
   return (
     <ScreenScroll>
-      <View style={styles.profileTop}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials}</Text>
-        </View>
-        <View style={styles.profileText}>
-          <Text style={styles.profileTitle}>Settings</Text>
-          <Text style={styles.profileSub} numberOfLines={1}>
-            {user?.email || "RiskWise account"} - {firstName}
-          </Text>
-        </View>
-        <View style={styles.statusPill}>
-          <View style={styles.statusDot} />
-          <Text style={styles.statusText}>{saveState}</Text>
-        </View>
-      </View>
-
-      <View style={styles.summaryGrid}>
-        <SummaryTile label="Risk cap" value={rules.maxRiskPerTrade} icon="shield-checkmark-outline" />
-        <SummaryTile label="Coach" value={appPreferences.defaultMode} icon="chatbubble-ellipses-outline" />
-        <SummaryTile label="Context" value={`${Object.values(savedContext).filter(Boolean).length}/4`} icon="folder-open-outline" />
-      </View>
-
-      <SettingsSection
-        icon="sparkles-outline"
-        title="AI Memory"
-        subtitle={`${memory.experienceLevel} - ${memory.riskStyle} - ${summarize(memory.sectors, "No sectors")}`}
-        open={openSections.memory}
-        onPress={() => toggle("memory")}
-      >
-        <ChoiceGroup
-          label="Experience level"
-          value={memory.experienceLevel}
-          options={["Learning", "Some experience", "Advanced"]}
-          onChange={(value) => setMemoryValue("experienceLevel", value)}
+      <ProfileTopBar />
+      <ProfileHeaderCard
+        initials={initials}
+        name={firstName}
+        identity={identity}
+        experience={memory.experience}
+        synced={synced}
+        riskRule={`${riskRules.maxRiskPerTradePercent}% max`}
+        tradesPerWeek={`${riskRules.maxTradesPerWeek} max`}
+        aiMode={appPreferences.defaultMode}
+      />
+      <SectionCard title="Trader DNA" action="Edit" onAction={() => setNotice("Editing coming soon.")}>
+        <SettingsRow icon="person-outline" label="Experience Level" value={memory.experience} />
+        <SettingsRow icon="shield-checkmark-outline" label="Risk Style" value={memory.riskStyle} />
+        <SettingsRow icon="list-outline" label="Preferred Explanations" value={memory.preferredExplanation} />
+        <SettingsRow icon="analytics-outline" label="Favorite Markets" value="Technology, Indexes" />
+        <SettingsRow icon="warning-outline" label="Common Mistakes to Watch" value={memory.commonMistakes.slice(0, 3).join(", ")} last />
+      </SectionCard>
+      <SectionCard title="What RiskWise Has Learned" action="View all" onAction={() => setNotice("Detailed learning history coming soon.")}>
+        <LearnedInsightCard
+          tone="risk"
+          title="Common Mistakes"
+          items={defaultProfile.learnedInsights.commonMistakes}
         />
-        <ChoiceGroup
-          label="Risk style"
-          value={memory.riskStyle}
-          options={["Conservative", "Balanced", "Aggressive"]}
-          onChange={(value) => setMemoryValue("riskStyle", value)}
+        <LearnedInsightCard
+          tone="good"
+          title="Strong Habits"
+          items={defaultProfile.learnedInsights.strongHabits}
         />
-        <ChoiceGroup
-          label="Preferred explanation"
-          value={memory.explanationStyle}
-          options={["Plain English", "Step-by-step", "Quant"]}
-          onChange={(value) => setMemoryValue("explanationStyle", value)}
+      </SectionCard>
+      <SectionCard title="Decision Quality Breakdown" action="View history" onAction={() => setNotice("Decision quality history coming soon.")}>
+        <ScoreBar label="Signal Discipline" value={defaultProfile.decisionQuality.signalDiscipline} />
+        <ScoreBar label="Position Sizing" value={defaultProfile.decisionQuality.positionSizing} />
+        <ScoreBar label="Volatility Awareness" value={defaultProfile.decisionQuality.volatilityAwareness} />
+        <ScoreBar label="Patience" value={defaultProfile.decisionQuality.patience} />
+        <ScoreBar label="Overall" value={defaultProfile.decisionQuality.overall} />
+      </SectionCard>
+      <SectionCard title="Risk Rules" action="Edit" onAction={() => setNotice("Risk rule editing coming soon.")}>
+        <SettingsRow icon="water-outline" label="Max risk per trade" value={`${riskRules.maxRiskPerTradePercent}% of account`} />
+        <SettingsRow icon="repeat-outline" label="Max trades per week" value={`${riskRules.maxTradesPerWeek} trades`} />
+        <SettingsRow icon="close-circle-outline" label="Avoid earnings trades" value={riskRules.avoidEarningsTrades ? "Enabled" : "Disabled"} />
+        <SettingsRow icon="time-outline" label="Warn if expiration < 7 days" value={riskRules.warnShortExpiration ? "Enabled" : "Disabled"} />
+        <SettingsRow icon="alert-circle-outline" label="Premium risk warning level" value={`${riskRules.premiumRiskWarningLevelPercent}%`} last />
+        <InfoBox title="These rules are used in every analysis" text={`Last updated: ${riskRules.lastUpdated}`} />
+      </SectionCard>
+      <SectionCard title="Analysis Sources" action="Manage" onAction={() => setNotice("Source management coming soon.")}>
+        <SourceRow label="Saved Checks" value={`${analysisSources.savedChecks.count} saved analyses`} enabled={analysisSources.savedChecks.enabled} />
+        <SourceRow label="Chat History" value={`${analysisSources.chatHistory.count} conversations`} enabled={analysisSources.chatHistory.enabled} />
+        <SourceRow label="Uploaded Screenshots" value={`${analysisSources.uploadedScreenshots.count} images`} enabled={analysisSources.uploadedScreenshots.enabled} />
+        <SourceRow label="Watchlist" value={`${analysisSources.watchlist.count} symbols tracked`} enabled={analysisSources.watchlist.enabled} last />
+        <Pressable style={styles.clearButton} onPress={() => setConfirmAction("clear")}>
+          <Text style={styles.clearButtonText}>Clear all context</Text>
+        </Pressable>
+      </SectionCard>
+      <SectionCard title="Coach Style & Preferences" action="Edit" onAction={() => setNotice("Coach style editing coming soon.")}>
+        <SettingsRow icon="chatbubble-ellipses-outline" label="Default AI Mode" value={coachPreferences.defaultAIMode} />
+        <SettingsRow icon="reader-outline" label="Explanation Style" value={coachPreferences.explanationStyle} />
+        <SettingsRow icon="git-compare-outline" label="Coaching Approach" value={coachPreferences.coachingApproach} />
+        <SettingsRow icon="help-buoy-outline" label="Question Style" value={coachPreferences.questionStyle} />
+        <SettingsRow icon="shield-outline" label="Risk Strictness" value={coachPreferences.riskStrictness} last />
+      </SectionCard>
+      <SectionCard title="App Preferences" action="Edit" onAction={() => setNotice("App preference editing coming soon.")}>
+        <SettingsRow icon="sparkles-outline" label="Default AI Mode" value={appPreferences.defaultMode} />
+        <SettingsRow icon="open-outline" label="Open App To" value={appPreferences.openAppTo} />
+        <ToggleRow
+          icon="albums-outline"
+          label="Use compact report cards"
+          value={appPreferences.compactReports}
+          onChange={(value) => persistAppPreferences({ ...appPreferences, compactReports: value })}
         />
-        <MultiSelect label="Sectors RiskWise should care about" values={memory.sectors} options={sectorOptions} onToggle={(value) => toggleTag("sectors", value)} />
-        <MultiSelect label="Common mistakes to watch for" values={memory.mistakes} options={mistakeOptions} onToggle={(value) => toggleTag("mistakes", value)} />
-      </SettingsSection>
-
-      <SettingsSection
-        icon="shield-checkmark-outline"
-        title="Risk Rules"
-        subtitle={`${rules.maxRiskPerTrade} max risk - ${rules.maxTradesPerWeek} trades/week`}
-        open={openSections.rules}
-        onPress={() => toggle("rules")}
-      >
-        <ChoiceGroup label="Max risk per trade" value={rules.maxRiskPerTrade} options={["1%", "2%", "3%", "5%"]} onChange={(value) => setRuleValue("maxRiskPerTrade", value)} />
-        <ChoiceGroup label="Max trades per week" value={rules.maxTradesPerWeek} options={["2", "5", "10", "No limit"]} onChange={(value) => setRuleValue("maxTradesPerWeek", value)} />
-        <ToggleRow label="Avoid earnings trades" value={rules.avoidEarnings} onChange={(value) => setRuleValue("avoidEarnings", value)} />
-        <ToggleRow label="Warn if expiration is under 7 days" value={rules.warnShortExpiry} onChange={(value) => setRuleValue("warnShortExpiry", value)} />
-        <ToggleRow label="Warn if premium risk is above X%" value={rules.warnPremiumRisk} onChange={(value) => setRuleValue("warnPremiumRisk", value)} />
-        <ChoiceGroup label="Premium risk warning level" value={rules.premiumRiskLimit} options={["2%", "5%", "10%"]} onChange={(value) => setRuleValue("premiumRiskLimit", value)} />
-      </SettingsSection>
-
-      <SettingsSection
-        icon="chatbubbles-outline"
-        title="Coach Style"
-        subtitle={summarizeCoachStyle(coachStyle)}
-        open={openSections.style}
-        onPress={() => toggle("style")}
-      >
-        <ToggleRow label="Simple explanations" value={coachStyle.simple} onChange={(value) => setCoachValue("simple", value)} />
-        <ToggleRow label="Quant-heavy" value={coachStyle.quantHeavy} onChange={(value) => setCoachValue("quantHeavy", value)} />
-        <ToggleRow label="Debate both sides" value={coachStyle.debateBothSides} onChange={(value) => setCoachValue("debateBothSides", value)} />
-        <ToggleRow label="Ask me questions first" value={coachStyle.askQuestionsFirst} onChange={(value) => setCoachValue("askQuestionsFirst", value)} />
-        <ToggleRow label="Be strict about risk" value={coachStyle.strictRisk} onChange={(value) => setCoachValue("strictRisk", value)} />
-      </SettingsSection>
-
-      <SettingsSection
-        icon="folder-open-outline"
-        title="Saved Context"
-        subtitle={summarizeEnabled(savedContext)}
-        open={openSections.context}
-        onPress={() => toggle("context")}
-      >
-        <ToggleRow label="Saved checks" value={savedContext.savedChecks} onChange={(value) => setContextValue("savedChecks", value)} />
-        <ToggleRow label="Chat history" value={savedContext.chatHistory} onChange={(value) => setContextValue("chatHistory", value)} />
-        <ToggleRow label="Uploaded screenshots" value={savedContext.uploadedScreenshots} onChange={(value) => setContextValue("uploadedScreenshots", value)} />
-        <ToggleRow label="Watchlist" value={savedContext.watchlist} onChange={(value) => setContextValue("watchlist", value)} />
-        <Pressable style={styles.outlineDanger} onPress={clearContext}>
-          <Text style={styles.outlineDangerText}>Clear all context</Text>
-        </Pressable>
-      </SettingsSection>
-
-      <SettingsSection
-        icon="options-outline"
-        title="App Preferences"
-        subtitle={`${appPreferences.defaultMode} mode - ${appPreferences.defaultTab} first`}
-        open={openSections.preferences}
-        onPress={() => toggle("preferences")}
-      >
-        <ChoiceGroup label="Default AI mode" value={appPreferences.defaultMode} options={["Explain", "Review", "Compare"]} onChange={(value) => setPreferenceValue("defaultMode", value)} />
-        <ChoiceGroup label="Open app to" value={appPreferences.defaultTab} options={["Home", "Check", "Coach", "Profile"]} onChange={(value) => setPreferenceValue("defaultTab", value)} />
-        <ToggleRow label="Use compact report cards" value={appPreferences.compactReports} onChange={(value) => setPreferenceValue("compactReports", value)} />
-        <ToggleRow label="Weekly learning digest" value={appPreferences.weeklyDigest} onChange={(value) => setPreferenceValue("weeklyDigest", value)} />
-        <ChoiceGroup label="Quiet hours" value={appPreferences.quietHours} options={["After 8 PM", "After 9 PM", "After 10 PM", "Never"]} onChange={(value) => setPreferenceValue("quietHours", value)} />
-      </SettingsSection>
-
-      <SettingsSection
-        icon="lock-closed-outline"
-        title="Security"
-        subtitle="Email, password reset, sign out, delete account"
-        open={openSections.security}
-        onPress={() => toggle("security")}
-      >
-        <InfoRow label="Email" value={user?.email || "Not connected"} />
-        <InfoRow label="Password reset" value="Use Forgot password on sign-in" />
-        <Pressable style={styles.signOutButton} onPress={onSignOut}>
-          <Ionicons name="log-out-outline" size={17} color={palette.red} />
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
-        {deleteArmed ? (
-          <View style={styles.deleteConfirmBox}>
-            <Text style={styles.deleteConfirmTitle}>Delete RiskWise account data?</Text>
-            <Text style={styles.securityNote}>
-              This removes your saved checks, chat history, profile preferences, and app data from the RiskWise database.
-              Clerk sign-in deletion is attempted if your account policy allows it.
-            </Text>
-            <TextInput
-              value={deleteText}
-              onChangeText={setDeleteText}
-              placeholder="Type DELETE"
-              placeholderTextColor="#A8AFA9"
-              autoCapitalize="characters"
-              style={styles.deleteInput}
-            />
-          </View>
-        ) : null}
-        <Pressable style={styles.dangerButton} onPress={confirmDeleteAccount}>
-          <Ionicons name="trash-outline" size={17} color={palette.red} />
-          <Text style={styles.dangerButtonText}>{deleteArmed ? "Confirm delete" : "Delete account data"}</Text>
-        </Pressable>
-        {securityStatus ? <Text style={styles.securityNote}>{securityStatus}</Text> : null}
-      </SettingsSection>
+        <ToggleRow
+          icon="notifications-outline"
+          label="Weekly learning digest"
+          value={appPreferences.weeklyDigest}
+          onChange={(value) => persistAppPreferences({ ...appPreferences, weeklyDigest: value })}
+        />
+        <SettingsRow icon="moon-outline" label="Quiet hours" value={appPreferences.quietHours} last />
+      </SectionCard>
+      <SectionCard title="AI Memory" action="Edit" onAction={() => setNotice("AI memory editing coming soon.")}>
+        <InfoBox title="RiskWise uses your memory to personalize analysis and coaching." />
+        <SettingsRow icon="person-outline" label="Experience" value={memory.experience} />
+        <SettingsRow icon="shield-checkmark-outline" label="Risk Style" value={memory.riskStyle} />
+        <SettingsRow icon="bulb-outline" label="Preferred Explanation" value={memory.preferredExplanation} />
+        <SettingsRow icon="pie-chart-outline" label="Sectors to Focus" value={memory.sectorsToFocus.join(", ")} />
+        <SettingsRow icon="warning-outline" label="Common Mistakes" value={memory.commonMistakes.join(", ")} last />
+      </SectionCard>
+      <SectionCard title="Account & Security" action="Edit" onAction={() => setNotice("Account editing coming soon.")}>
+        <SettingsRow icon="mail-outline" label="Email" value={email} />
+        <SettingsRow icon="key-outline" label="Password" value="********" />
+        <SettingsRow icon="refresh-outline" label="Password Reset" value="Use forgot password on sign-in" />
+        <ActionRow icon="log-out-outline" label="Sign Out" onPress={() => setConfirmAction("signOut")} />
+        <ActionRow icon="trash-outline" label="Delete Account Data" danger onPress={() => setConfirmAction("delete")} last />
+      </SectionCard>
+      <Card style={styles.footerNote}>
+        <Text style={styles.footerText}>RiskWise is here to help you make better decisions.</Text>
+      </Card>
+      {notice ? <NoticeModal message={notice} onClose={() => setNotice("")} /> : null}
+      {confirmAction ? (
+        <ConfirmModal
+          action={confirmAction}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={confirmAction === "clear" ? clearAllContext : confirmAction === "delete" ? confirmDelete : confirmSignOut}
+        />
+      ) : null}
     </ScreenScroll>
   );
 }
 
-function SummaryTile({ label, value, icon }) {
+function ProfileTopBar() {
   return (
-    <View style={styles.summaryTile}>
-      <Ionicons name={icon} size={15} color={palette.green} />
-      <Text style={styles.summaryLabel}>{label}</Text>
-      <Text style={styles.summaryValue} numberOfLines={1}>{value}</Text>
-    </View>
-  );
-}
-
-function SettingsSection({ icon, title, subtitle, open, onPress, children }) {
-  return (
-    <View style={[styles.sectionShell, open && styles.sectionShellOpen]}>
-      <Pressable style={styles.sectionHeader} onPress={onPress}>
-        <View style={styles.sectionIcon}>
-          <Ionicons name={icon} size={17} color={palette.green} />
-        </View>
-        <View style={styles.sectionCopy}>
-          <Text style={styles.sectionTitle}>{title}</Text>
-          <Text style={styles.sectionSubtitle} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        </View>
-        <Ionicons name={open ? "chevron-up" : "chevron-down"} size={18} color={palette.muted} />
-      </Pressable>
-      {open ? <View style={styles.sectionBody}>{children}</View> : null}
-    </View>
-  );
-}
-
-function ChoiceGroup({ label, value, options, onChange }) {
-  return (
-    <View style={styles.controlBlock}>
-      <Text style={styles.controlLabel}>{label}</Text>
-      <View style={styles.choiceWrap}>
-        {options.map((option) => {
-          const active = option === value;
-          return (
-            <Pressable key={option} style={[styles.choiceChip, active && styles.choiceChipActive]} onPress={() => onChange(option)}>
-              <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{option}</Text>
-            </Pressable>
-          );
-        })}
+    <View style={styles.topBar}>
+      <Text style={styles.pageTitle}>Profile</Text>
+      <View style={styles.topActions}>
+        <Ionicons name="notifications-outline" size={19} color={palette.dark} />
+        <Ionicons name="settings-outline" size={20} color={palette.dark} />
       </View>
     </View>
   );
 }
 
-function MultiSelect({ label, values, options, onToggle }) {
-  const selected = Array.isArray(values) ? values : [];
+function ProfileHeaderCard({ initials, name, identity, experience, synced, riskRule, tradesPerWeek, aiMode }) {
   return (
-    <View style={styles.controlBlock}>
-      <Text style={styles.controlLabel}>{label}</Text>
-      <View style={styles.choiceWrap}>
-        {options.map((option) => {
-          const active = selected.includes(option);
-          return (
-            <Pressable key={option} style={[styles.choiceChip, active && styles.choiceChipActive]} onPress={() => onToggle(option)}>
-              <Text style={[styles.choiceText, active && styles.choiceTextActive]}>{option}</Text>
-            </Pressable>
-          );
-        })}
+    <Card style={styles.heroCard}>
+      <View style={styles.heroTop}>
+        <View style={styles.avatarWrap}>
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{initials}</Text>
+          </View>
+        </View>
+        <View style={styles.heroText}>
+          <Text style={styles.userName}>{name}</Text>
+          <Text style={styles.identityText}>{identity}</Text>
+          <Text style={styles.experienceText}>{experience}</Text>
+        </View>
+        <View style={styles.syncPill}>
+          <View style={styles.syncDot} />
+          <Text style={styles.syncText}>{synced}</Text>
+        </View>
+      </View>
+      <View style={styles.heroDivider} />
+      <View style={styles.miniStats}>
+        <ProfileMiniStat icon="pulse-outline" label="Decision Quality" value="84" suffix="/100" visual="spark" />
+        <ProfileMiniStat icon="shield-checkmark-outline" label="Risk Rule" value={riskRule} />
+        <ProfileMiniStat icon="calendar-outline" label="Trades / Week" value={tradesPerWeek} />
+        <ProfileMiniStat icon="sparkles-outline" label="AI Mode" value={aiMode} />
+      </View>
+    </Card>
+  );
+}
+
+function ProfileMiniStat({ icon, label, value, suffix, visual }) {
+  return (
+    <View style={styles.miniStat}>
+      <Ionicons name={icon} size={16} color={palette.dark} />
+      <Text style={styles.miniLabel}>{label}</Text>
+      <Text style={styles.miniValue}>
+        {value}
+        {suffix ? <Text style={styles.miniSuffix}>{suffix}</Text> : null}
+      </Text>
+      {visual ? <View style={styles.sparkLine}><View style={styles.sparkLineFill} /></View> : null}
+    </View>
+  );
+}
+
+function SectionCard({ title, action, onAction, children }) {
+  return (
+    <Card style={styles.sectionCard}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        {action ? (
+          <Pressable onPress={onAction}>
+            <Text style={styles.sectionAction}>{action}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+      {children}
+    </Card>
+  );
+}
+
+function SettingsRow({ icon, label, value, last }) {
+  return (
+    <View style={[styles.settingsRow, last && styles.noBorder]}>
+      <View style={styles.rowIcon}>
+        <Ionicons name={icon} size={17} color={palette.dark} />
+      </View>
+      <View style={styles.rowCopy}>
+        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={styles.rowValue} numberOfLines={2}>{value}</Text>
       </View>
     </View>
   );
 }
 
-function ToggleRow({ label, value, onChange }) {
+function SourceRow({ label, value, enabled, last }) {
   return (
-    <Pressable style={styles.toggleRow} onPress={() => onChange(!value)}>
-      <Text style={styles.toggleLabel}>{label}</Text>
-      <View style={[styles.switchTrack, value && styles.switchTrackActive]}>
-        <View style={[styles.switchThumb, value && styles.switchThumbActive]} />
+    <View style={[styles.settingsRow, last && styles.noBorder]}>
+      <View style={[styles.sourceIcon, !enabled && styles.sourceIconOff]}>
+        <Ionicons name={enabled ? "checkmark" : "close"} size={14} color={enabled ? palette.green : palette.muted} />
+      </View>
+      <View style={styles.rowCopy}>
+        <Text style={styles.rowLabel}>{label}</Text>
+        <Text style={styles.rowValue}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ToggleRow({ icon, label, value, onChange }) {
+  return (
+    <Pressable style={styles.settingsRow} onPress={() => onChange(!value)}>
+      <View style={styles.rowIcon}>
+        <Ionicons name={icon} size={17} color={palette.dark} />
+      </View>
+      <Text style={[styles.rowLabel, styles.toggleLabel]}>{label}</Text>
+      <View style={[styles.toggleTrack, value && styles.toggleTrackOn]}>
+        <View style={[styles.toggleThumb, value && styles.toggleThumbOn]} />
       </View>
     </Pressable>
   );
 }
 
-function InfoRow({ label, value }) {
+function ActionRow({ icon, label, onPress, danger, last }) {
   return (
-    <View style={styles.infoRow}>
-      <Text style={styles.infoLabel}>{label}</Text>
-      <Text style={styles.infoValue} numberOfLines={2}>
-        {value}
-      </Text>
+    <Pressable style={[styles.settingsRow, last && styles.noBorder]} onPress={onPress}>
+      <View style={styles.rowIcon}>
+        <Ionicons name={icon} size={17} color={danger ? palette.red : palette.dark} />
+      </View>
+      <Text style={[styles.rowLabel, danger && styles.dangerText]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function LearnedInsightCard({ title, items, tone }) {
+  const risk = tone === "risk";
+  return (
+    <View style={styles.learnedCard}>
+      <View style={styles.learnedTitleRow}>
+        <View style={[styles.learnedIcon, risk ? styles.learnedIconRisk : styles.learnedIconGood]}>
+          <Ionicons name={risk ? "alert-outline" : "accessibility-outline"} size={15} color={risk ? palette.red : palette.green} />
+        </View>
+        <Text style={styles.learnedTitle}>{title}</Text>
+      </View>
+      {items.map((item) => (
+        <Text key={item} style={styles.bulletText}>{risk ? "-" : "✓"} {item}</Text>
+      ))}
     </View>
   );
 }
 
-function summarize(values, fallback) {
-  if (Array.isArray(values) && values.length > 0) {
-    return values[0] + (values.length > 1 ? ` +${values.length - 1}` : "");
-  }
-  return fallback;
+function ScoreBar({ label, value }) {
+  const tone = value >= 80 ? "good" : value >= 60 ? "warn" : "risk";
+  return (
+    <View style={styles.scoreRow}>
+      <Text style={styles.scoreLabel}>{label}</Text>
+      <View style={styles.scoreTrack}>
+        <View style={[styles.scoreFill, { width: `${value}%`, backgroundColor: toneColor(tone) }]} />
+      </View>
+      <Text style={styles.scoreValue}>{value}/100</Text>
+    </View>
+  );
 }
 
-function summarizeCoachStyle(style) {
-  const labels = [];
-  if (style.simple) {
-    labels.push("Simple");
-  }
-  if (style.quantHeavy) {
-    labels.push("Quant");
-  }
-  if (style.debateBothSides) {
-    labels.push("Debate");
-  }
-  if (style.strictRisk) {
-    labels.push("Strict risk");
-  }
-  return labels.slice(0, 3).join(" - ") || "Default";
+function InfoBox({ title, text }) {
+  return (
+    <View style={styles.infoBox}>
+      <Text style={styles.infoTitle}>{title}</Text>
+      {text ? <Text style={styles.infoText}>{text}</Text> : null}
+    </View>
+  );
 }
 
-function summarizeEnabled(values) {
-  const count = Object.values(values).filter(Boolean).length;
-  if (count === 0) {
-    return "No saved context enabled";
-  }
-  return `${count} context sources enabled`;
+function NoticeModal({ message, onClose }) {
+  return (
+    <Modal transparent animationType="fade" visible>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>RiskWise</Text>
+          <Text style={styles.modalText}>{message}</Text>
+          <Pressable style={styles.modalButton} onPress={onClose}>
+            <Text style={styles.modalButtonText}>OK</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ConfirmModal({ action, onCancel, onConfirm }) {
+  const copy = {
+    clear: ["Clear all context?", "Saved checks, chat history, screenshots, and watchlist context will be disabled for analysis."],
+    signOut: ["Sign out?", "Your saved profile and checks stay in your RiskWise account."],
+    delete: ["Delete account data?", "This removes RiskWise app data tied to this profile. This cannot be undone."]
+  }[action];
+  return (
+    <Modal transparent animationType="fade" visible>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>{copy[0]}</Text>
+          <Text style={styles.modalText}>{copy[1]}</Text>
+          <View style={styles.modalActions}>
+            <Pressable style={styles.cancelButton} onPress={onCancel}>
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
+            <Pressable style={[styles.confirmButton, action === "delete" && styles.confirmDanger]} onPress={onConfirm}>
+              <Text style={styles.confirmText}>Confirm</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function firstNameOf(name) {
+  return (name || "Aarav").split(" ")[0];
 }
 
 function getInitials(name) {
-  if (!name) {
-    return "RW";
-  }
-  return name
+  const initials = String(name || "Aarav Nagar")
     .split(" ")
     .filter(Boolean)
-    .map((part) => part[0])
+    .map((word) => word[0])
     .join("")
     .slice(0, 2)
     .toUpperCase();
+  return initials || "AN";
+}
+
+function normalizeList(value, fallback) {
+  return Array.isArray(value) && value.length ? value : fallback;
+}
+
+function numberFromPercent(value) {
+  const number = Number(String(value || "").replace(/[^0-9.]/g, ""));
+  return Number.isFinite(number) && number > 0 ? number : 2;
+}
+
+function toneColor(tone) {
+  if (tone === "risk") return palette.red;
+  if (tone === "warn") return "#F59E0B";
+  return palette.green;
 }
 
 const styles = StyleSheet.create({
-  profileTop: {
-    minHeight: 62,
-    borderRadius: 20,
-    backgroundColor: "#FBFFFC",
-    borderWidth: 1,
-    borderColor: "#D7F0DF",
-    paddingHorizontal: 11,
-    marginTop: 10,
-    marginBottom: 7,
+  topBar: {
+    minHeight: 48,
+    paddingTop: 8,
+    paddingBottom: 10,
     flexDirection: "row",
     alignItems: "center",
-    gap: 10
+    justifyContent: "space-between"
+  },
+  pageTitle: {
+    color: palette.dark,
+    fontSize: 24,
+    fontWeight: "900"
+  },
+  topActions: {
+    flexDirection: "row",
+    gap: 18,
+    alignItems: "center"
+  },
+  heroCard: {
+    padding: 0,
+    overflow: "hidden"
+  },
+  heroTop: {
+    minHeight: 108,
+    padding: 17,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14
+  },
+  avatarWrap: {
+    width: 74,
+    height: 74,
+    borderRadius: 37,
+    backgroundColor: "#DFF5E7",
+    alignItems: "center",
+    justifyContent: "center"
   },
   avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: palette.greenSoft,
-    borderWidth: 1,
-    borderColor: "#CFEFD8",
+    width: 61,
+    height: 61,
+    borderRadius: 31,
+    backgroundColor: "#7AD093",
     alignItems: "center",
     justifyContent: "center"
   },
   avatarText: {
-    color: palette.green,
-    fontSize: 13,
+    color: "#FFFFFF",
+    fontSize: 24,
     fontWeight: "900"
   },
-  profileText: {
+  heroText: {
     flex: 1
   },
-  profileTitle: {
+  userName: {
     color: palette.dark,
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: "900"
   },
-  profileSub: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "700",
-    marginTop: 2
+  identityText: {
+    color: palette.green,
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 4
   },
-  statusPill: {
-    height: 27,
+  experienceText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: "700",
+    marginTop: 4
+  },
+  syncPill: {
     borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    backgroundColor: "#F5FFF8",
     paddingHorizontal: 8,
+    paddingVertical: 5,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    backgroundColor: "#F2FBF5",
-    borderWidth: 1,
-    borderColor: "#CFEFD8"
+    gap: 5
   },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
+  syncDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: palette.green
   },
-  statusText: {
+  syncText: {
     color: palette.green,
     fontSize: 9,
     fontWeight: "900"
   },
-  summaryGrid: {
-    flexDirection: "row",
-    gap: 7,
-    marginBottom: 8
+  heroDivider: {
+    height: 1,
+    marginHorizontal: 17,
+    backgroundColor: "#EEF2EF"
   },
-  summaryTile: {
+  miniStats: {
+    minHeight: 86,
+    flexDirection: "row",
+    paddingHorizontal: 8,
+    paddingVertical: 12
+  },
+  miniStat: {
     flex: 1,
-    minHeight: 57,
-    borderRadius: 17,
-    borderWidth: 1,
-    borderColor: "#DDF1E2",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 9,
-    paddingVertical: 8,
-    justifyContent: "space-between"
+    alignItems: "center",
+    borderRightWidth: 1,
+    borderRightColor: "#EEF2EF",
+    paddingHorizontal: 4
   },
-  summaryLabel: {
+  miniLabel: {
     color: palette.muted,
-    fontSize: 9,
-    fontWeight: "900"
+    fontSize: 8,
+    fontWeight: "900",
+    marginTop: 7,
+    textAlign: "center"
   },
-  summaryValue: {
-    color: palette.dark,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  sectionShell: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
-    marginBottom: 7,
-    overflow: "hidden"
-  },
-  sectionShellOpen: {
-    borderColor: "#D3EEDB"
-  },
-  sectionHeader: {
-    minHeight: 53,
-    paddingHorizontal: 11,
-    paddingVertical: 7,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10
-  },
-  sectionIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: palette.greenSoft,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  sectionCopy: {
-    flex: 1
-  },
-  sectionTitle: {
+  miniValue: {
     color: palette.dark,
     fontSize: 13,
-    fontWeight: "900"
-  },
-  sectionSubtitle: {
-    color: palette.muted,
-    fontSize: 10,
-    fontWeight: "700",
-    marginTop: 2
-  },
-  sectionBody: {
-    borderTopWidth: 1,
-    borderTopColor: palette.border,
-    paddingHorizontal: 11,
-    paddingVertical: 11
-  },
-  controlBlock: {
-    marginBottom: 12
-  },
-  controlLabel: {
-    color: palette.muted,
-    fontSize: 11,
     fontWeight: "900",
-    marginBottom: 8
+    marginTop: 5,
+    textAlign: "center"
   },
-  choiceWrap: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 7
-  },
-  choiceChip: {
-    minHeight: 31,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 11,
-    alignItems: "center",
-    justifyContent: "center"
-  },
-  choiceChipActive: {
-    backgroundColor: palette.green,
-    borderColor: palette.green
-  },
-  choiceText: {
-    color: palette.dark,
-    fontSize: 11,
+  miniSuffix: {
+    color: palette.muted,
+    fontSize: 8,
     fontWeight: "900"
   },
-  choiceTextActive: {
-    color: "#FFFFFF"
+  sparkLine: {
+    width: 34,
+    height: 4,
+    backgroundColor: "#E9F4EC",
+    borderRadius: 999,
+    marginTop: 4,
+    overflow: "hidden"
   },
-  toggleRow: {
-    minHeight: 43,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F3F0",
+  sparkLineFill: {
+    width: "84%",
+    height: "100%",
+    backgroundColor: palette.green,
+    borderRadius: 999
+  },
+  sectionCard: {
+    padding: 15
+  },
+  sectionHeader: {
+    minHeight: 24,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 14
+    marginBottom: 8
   },
-  toggleLabel: {
-    flex: 1,
+  sectionTitle: {
+    color: palette.dark,
+    fontSize: 15,
+    fontWeight: "900"
+  },
+  sectionAction: {
+    color: palette.green,
+    fontSize: 11,
+    fontWeight: "900"
+  },
+  settingsRow: {
+    minHeight: 58,
+    borderBottomWidth: 1,
+    borderBottomColor: "#EEF2EF",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12
+  },
+  noBorder: {
+    borderBottomWidth: 0
+  },
+  rowIcon: {
+    width: 25,
+    alignItems: "center"
+  },
+  sourceIcon: {
+    width: 25,
+    height: 25,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: "#BFEACB",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#F5FFF8"
+  },
+  sourceIconOff: {
+    borderColor: palette.border,
+    backgroundColor: "#F6F7F6"
+  },
+  rowCopy: {
+    flex: 1
+  },
+  rowLabel: {
     color: palette.dark,
     fontSize: 12,
-    fontWeight: "800"
+    fontWeight: "900"
   },
-  switchTrack: {
+  rowValue: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "700",
+    marginTop: 3
+  },
+  toggleLabel: {
+    flex: 1
+  },
+  toggleTrack: {
     width: 43,
     height: 25,
     borderRadius: 999,
@@ -653,124 +693,217 @@ const styles = StyleSheet.create({
     padding: 3,
     justifyContent: "center"
   },
-  switchTrackActive: {
+  toggleTrackOn: {
     backgroundColor: palette.green
   },
-  switchThumb: {
+  toggleThumb: {
     width: 19,
     height: 19,
-    borderRadius: 11,
+    borderRadius: 10,
     backgroundColor: "#FFFFFF",
     shadowColor: "#000000",
     shadowOpacity: 0.08,
     shadowRadius: 5
   },
-  switchThumbActive: {
+  toggleThumbOn: {
     transform: [{ translateX: 18 }]
   },
-  infoRow: {
-    minHeight: 45,
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0F3F0",
+  learnedCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "#E6EAE6",
+    backgroundColor: "#FFFFFF",
+    padding: 13,
+    marginTop: 9
+  },
+  learnedTitleRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: 14
+    gap: 8,
+    marginBottom: 7
   },
-  infoLabel: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "900"
+  learnedIcon: {
+    width: 25,
+    height: 25,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center"
   },
-  infoValue: {
-    flex: 1,
+  learnedIconRisk: {
+    backgroundColor: "#FFF1F1"
+  },
+  learnedIconGood: {
+    backgroundColor: palette.greenSoft
+  },
+  learnedTitle: {
     color: palette.dark,
     fontSize: 12,
+    fontWeight: "900"
+  },
+  bulletText: {
+    color: palette.dark,
+    fontSize: 11,
+    lineHeight: 18,
+    fontWeight: "700"
+  },
+  scoreRow: {
+    minHeight: 31,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  scoreLabel: {
+    width: 118,
+    color: palette.dark,
+    fontSize: 10,
+    fontWeight: "800"
+  },
+  scoreTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#ECF1ED",
+    overflow: "hidden"
+  },
+  scoreFill: {
+    height: "100%",
+    borderRadius: 999
+  },
+  scoreValue: {
+    width: 45,
+    color: palette.dark,
+    fontSize: 10,
     fontWeight: "900",
     textAlign: "right"
   },
-  signOutButton: {
-    minHeight: 43,
+  infoBox: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#F5D1D1",
-    backgroundColor: "#FFFBFB",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-    marginTop: 12
-  },
-  signOutText: {
-    color: palette.red,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  dangerButton: {
-    minHeight: 43,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#F5D1D1",
-    backgroundColor: "#FFFFFF",
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-    marginTop: 8
-  },
-  dangerButtonText: {
-    color: palette.red,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  outlineDanger: {
-    minHeight: 42,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: "#F5D1D1",
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 12,
-    backgroundColor: "#FFFFFF"
-  },
-  outlineDangerText: {
-    color: palette.red,
-    fontSize: 12,
-    fontWeight: "900"
-  },
-  deleteConfirmBox: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: "#F5D1D1",
-    backgroundColor: "#FFFBFB",
+    borderColor: "#CFEFD8",
+    backgroundColor: "#F4FFF7",
     padding: 12,
-    marginTop: 12
+    marginTop: 10
   },
-  deleteConfirmTitle: {
-    color: palette.red,
-    fontSize: 13,
-    fontWeight: "900",
-    marginBottom: 4
+  infoTitle: {
+    color: palette.green,
+    fontSize: 11,
+    fontWeight: "900"
   },
-  deleteInput: {
-    minHeight: 38,
-    borderRadius: 12,
+  infoText: {
+    color: palette.muted,
+    fontSize: 10,
+    fontWeight: "700",
+    marginTop: 6
+  },
+  clearButton: {
+    minHeight: 45,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#F5D1D1",
-    backgroundColor: "#FFFFFF",
-    paddingHorizontal: 10,
-    marginTop: 10,
-    marginBottom: 2,
+    borderColor: "#F8CACA",
+    backgroundColor: "#FFF8F8",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 13
+  },
+  clearButtonText: {
+    color: palette.red,
+    fontSize: 12,
+    fontWeight: "900"
+  },
+  dangerText: {
+    color: palette.red
+  },
+  footerNote: {
+    backgroundColor: "#F0FBF4",
+    borderColor: "#CFEFD8",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  footerText: {
     color: palette.dark,
     fontSize: 12,
-    fontWeight: "900",
-    outlineStyle: "none"
+    lineHeight: 17,
+    fontWeight: "800",
+    textAlign: "center"
   },
-  securityNote: {
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(23,33,58,0.24)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 26
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 360,
+    borderRadius: 22,
+    backgroundColor: "#FFFFFF",
+    padding: 18,
+    borderWidth: 1,
+    borderColor: palette.border,
+    shadowColor: "#000",
+    shadowOpacity: 0.18,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 16 }
+  },
+  modalTitle: {
+    color: palette.dark,
+    fontSize: 18,
+    fontWeight: "900"
+  },
+  modalText: {
     color: palette.muted,
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 12,
+    lineHeight: 18,
     fontWeight: "700",
     marginTop: 8
+  },
+  modalButton: {
+    minHeight: 43,
+    borderRadius: 14,
+    backgroundColor: palette.green,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 16
+  },
+  modalButtonText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  modalActions: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16
+  },
+  cancelButton: {
+    flex: 1,
+    minHeight: 43,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: palette.border,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  cancelText: {
+    color: palette.dark,
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  confirmButton: {
+    flex: 1,
+    minHeight: 43,
+    borderRadius: 14,
+    backgroundColor: palette.green,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  confirmDanger: {
+    backgroundColor: palette.red
+  },
+  confirmText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "900"
   }
 });
