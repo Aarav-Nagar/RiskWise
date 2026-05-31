@@ -8,6 +8,8 @@ on:
 jobs:
   mobile-demo:
     runs-on: ubuntu-latest
+    env:
+      EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY || 'pk_test_Zml0LWZlbGluZS0yOC5jbGVyay5hY2NvdW50cy5kZXYk' }}
     defaults:
       run:
         working-directory: frontend/mobile-demo
