@@ -2,11 +2,6 @@ name: Deploy Mobile Demo To GitHub Pages
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "frontend/mobile-demo/**"
-      - ".github/workflows/pages.yml"
 
 permissions:
   contents: read
