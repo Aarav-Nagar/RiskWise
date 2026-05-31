@@ -293,7 +293,10 @@ async def options_context(ticker: str) -> OptionsContextResponse:
         provider=provider,
         fields_ready=["ticker", "provider_status"],
         fields_pending=READY_FIELDS + PENDING_FIELDS,
-        message="RiskWise is ready to receive market data, but no enabled provider is active for this environment.",
+        message=(
+            "RiskWise is ready to receive stock-level market data, but no enabled provider is active for this environment. "
+            "Live option chains, IV, Greeks, and real premiums still require a dedicated options feed such as Tradier or Polygon."
+        ),
     )
 
 
