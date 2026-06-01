@@ -92,6 +92,10 @@ class DemoStore:
         user_id = self.users_by_email.get(clean_email(email))
         return public_user(self.users[user_id]) if user_id else None
 
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        record = self.users.get(user_id)
+        return public_user(record) if record else None
+
     def update_user_profile(self, user_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         if user_id not in self.users:
             raise ValueError("User profile was not found.")
@@ -306,6 +310,10 @@ class MongoStore(DemoStore):
 
     def find_user_by_email(self, email: str) -> dict[str, Any] | None:
         record = self.db.users.find_one({"email": clean_email(email)})
+        return public_user(record) if record else None
+
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        record = self.db.users.find_one({"id": user_id})
         return public_user(record) if record else None
 
     def update_user_profile(self, user_id: str, updates: dict[str, Any]) -> dict[str, Any]:

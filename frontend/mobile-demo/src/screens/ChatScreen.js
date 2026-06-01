@@ -17,6 +17,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
   const [selectedTrade, setSelectedTrade] = useState(currentReport || null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [attachments, setAttachments] = useState([]);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
   const scrollRef = useRef(null);
   const tradeOptions = useMemo(() => buildTradeOptions(currentReport, savedChecks), [currentReport, savedChecks]);
@@ -40,6 +41,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     const messageText = clean || "Review these attachments.";
     setInput("");
     setAttachments([]);
+    setAttachmentMenuOpen(false);
     setUploadStatus("");
     setMessages((items) => [...items, { role: "user", content: messageText, attachments: outgoingAttachments }]);
     setLoading(true);
@@ -110,6 +112,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     setMessages([initialGreeting(user)]);
     setHistoryOpen(false);
     setAttachments([]);
+    setAttachmentMenuOpen(false);
     setInput("");
   }
 
@@ -130,27 +133,39 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     }
   }
 
-  function attachFile() {
+  function openAttachmentMenu() {
+    setAttachmentMenuOpen((open) => !open);
+  }
+
+  function selectUploadSource(source) {
+    setAttachmentMenuOpen(false);
     if (Platform.OS !== "web" || typeof document === "undefined") {
       setMessages((items) => [
         ...items,
         {
           role: "assistant",
-          content: "File upload is active in the browser preview. Native document upload comes when we package the iOS build."
+          content: "Attachment upload is active in the browser preview. Native camera and library pickers come when we package the iOS build."
         }
       ]);
       return;
     }
     const inputEl = document.createElement("input");
     inputEl.type = "file";
-    inputEl.multiple = true;
-    inputEl.accept = "image/*,.txt,.csv,.pdf";
+    inputEl.multiple = source !== "camera";
+    if (source === "camera") {
+      inputEl.accept = "image/*";
+      inputEl.capture = "environment";
+    } else if (source === "library") {
+      inputEl.accept = "image/*";
+    } else {
+      inputEl.accept = "image/*,.txt,.csv,.pdf";
+    }
     inputEl.onchange = async () => {
       const files = Array.from(inputEl.files || []).slice(0, 4);
-      setUploadStatus(files.length ? "Reading upload..." : "");
-      const parsed = await Promise.all(files.map(readAttachment));
+      setUploadStatus(files.length ? `Reading ${uploadSourceLabel(source).toLowerCase()}...` : "");
+      const parsed = await Promise.all(files.map((file) => readAttachment(file, source)));
       setAttachments((items) => [...items, ...parsed].slice(0, 4));
-      setUploadStatus(parsed.length ? `${parsed.length} file${parsed.length === 1 ? "" : "s"} attached. Ask RiskWiseAI to review them.` : "");
+      setUploadStatus(parsed.length ? `${parsed.length} ${parsed.length === 1 ? "item" : "items"} added from ${uploadSourceLabel(source)}. Ask RiskWiseAI to review them.` : "");
     };
     inputEl.click();
   }
@@ -213,10 +228,11 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
       </ScrollView>
 
       <View style={styles.composerWrap}>
+        {attachmentMenuOpen ? <AttachmentMenu onPick={selectUploadSource} onClose={() => setAttachmentMenuOpen(false)} /> : null}
         {attachments.length ? <AttachmentTray attachments={attachments} onRemove={(index) => setAttachments((items) => items.filter((_, i) => i !== index))} /> : null}
         {uploadStatus ? <Text style={styles.uploadStatus}>{uploadStatus}</Text> : null}
         <View style={styles.inputRow}>
-          <Pressable accessibilityLabel="Add attachment" style={styles.plusButton} onPress={attachFile}>
+          <Pressable accessibilityLabel="Add attachment" style={[styles.plusButton, attachmentMenuOpen && styles.plusButtonActive]} onPress={openAttachmentMenu}>
             <Ionicons name="add" size={22} color={palette.green} />
           </Pressable>
           <TextInput
@@ -242,6 +258,54 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     setSelectedTrade(report);
     setPickerOpen(false);
   }
+}
+
+function AttachmentMenu({ onPick, onClose }) {
+  return (
+    <View style={styles.attachmentMenu}>
+      <View style={styles.attachmentMenuHeader}>
+        <Text style={styles.attachmentMenuTitle}>Add context</Text>
+        <Pressable accessibilityLabel="Close attachment menu" style={styles.attachmentMenuClose} onPress={onClose}>
+          <Ionicons name="close" size={15} color={palette.muted} />
+        </Pressable>
+      </View>
+      <View style={styles.attachmentOptions}>
+        <AttachmentAction
+          icon="camera-outline"
+          title="Take Photo"
+          subtitle="Capture a contract screenshot"
+          onPress={() => onPick("camera")}
+        />
+        <AttachmentAction
+          icon="images-outline"
+          title="Photo Library"
+          subtitle="Choose saved screenshots"
+          onPress={() => onPick("library")}
+        />
+        <AttachmentAction
+          icon="folder-open-outline"
+          title="Files"
+          subtitle="PDF, CSV, text, or image"
+          onPress={() => onPick("files")}
+        />
+      </View>
+    </View>
+  );
+}
+
+function AttachmentAction({ icon, title, subtitle, onPress }) {
+  return (
+    <Pressable accessibilityLabel={title} style={styles.attachmentAction} onPress={onPress}>
+      <View style={styles.attachmentActionIcon}>
+        <Ionicons name={icon} size={19} color={palette.green} />
+      </View>
+      <View style={styles.attachmentActionCopy}>
+        <Text style={styles.attachmentActionTitle}>{title}</Text>
+        <Text style={styles.attachmentActionSub}>{subtitle}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={palette.muted} />
+    </Pressable>
+  );
 }
 
 function MessageBubble({ message }) {
@@ -392,11 +456,12 @@ function TradeOption({ label, sub, active, onPress }) {
   );
 }
 
-async function readAttachment(file) {
+async function readAttachment(file, source = "files") {
   const base = {
     name: file.name,
     type: file.type || "application/octet-stream",
-    size: file.size
+    size: file.size,
+    source
   };
   if (file.type?.startsWith("image/") && file.size < 1_500_000) {
     return { ...base, dataUrl: await readAsDataUrl(file) };
@@ -421,6 +486,12 @@ function formatBytes(size) {
   if (number < 1024) return `${number} B`;
   if (number < 1024 * 1024) return `${(number / 1024).toFixed(1)} KB`;
   return `${(number / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function uploadSourceLabel(source) {
+  if (source === "camera") return "Camera";
+  if (source === "library") return "Photo Library";
+  return "Files";
 }
 
 function initialGreeting(user) {
@@ -816,6 +887,74 @@ const styles = StyleSheet.create({
     borderTopColor: "#ECF1EC",
     backgroundColor: "#FBFDFB"
   },
+  attachmentMenu: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "#DCEBDD",
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    marginBottom: 9,
+    shadowColor: palette.green,
+    shadowOpacity: 0.13,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 }
+  },
+  attachmentMenuHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 9
+  },
+  attachmentMenuTitle: {
+    color: palette.dark,
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  attachmentMenuClose: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#F5F8F5",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  attachmentOptions: {
+    gap: 7
+  },
+  attachmentAction: {
+    minHeight: 58,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#E5F0E6",
+    backgroundColor: "#FBFFFC",
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  attachmentActionIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: palette.greenSoft,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  attachmentActionCopy: {
+    flex: 1
+  },
+  attachmentActionTitle: {
+    color: palette.dark,
+    fontSize: 12,
+    fontWeight: "900"
+  },
+  attachmentActionSub: {
+    color: palette.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 2
+  },
   attachmentTray: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -876,6 +1015,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#FFFFFF",
     alignItems: "center",
     justifyContent: "center"
+  },
+  plusButtonActive: {
+    backgroundColor: palette.greenSoft,
+    borderColor: palette.green
   },
   input: {
     flex: 1,

@@ -398,6 +398,16 @@ def build_structured_response(
         cards = [{"label": "Best use", "value": "Options risk", "tone": "good"}]
         blocks = []
 
+    if attachments:
+        cards.append({"label": "Attachment", "value": attachment_source_summary(attachments), "tone": "good"})
+        blocks.append(
+            {
+                "type": "mini_table",
+                "title": "Attachment context",
+                "rows": attachment_context_rows(attachments),
+            }
+        )
+
     return {
         "answer": clean_answer(answer),
         "mode": mode,
@@ -414,6 +424,7 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
     response["tools_used"] = tool_context.get("tools_used", [])
 
     tool_results = tool_context.get("tool_results") or []
+    tool_rows: list[list[str]] = []
     for item in tool_results:
         name = item.get("name")
         result = item.get("result") or {}
@@ -436,16 +447,34 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
                         "tone": "good" if float(change) >= 0 else "risk",
                     }
                 )
+            tool_rows.append(["Stock quote", f"{result.get('ticker', '')} {dollars(price)}"])
         elif name == "get_earnings" and result.get("items"):
             next_event = result["items"][0]
             response["summary_cards"].append({"label": "Earnings", "value": next_event.get("date", "Available"), "tone": "warn"})
+            tool_rows.append(["Earnings", str(next_event.get("date") or "Available")])
         elif name == "calculate_breakeven" and result.get("status") == "ok":
             response["summary_cards"].append({"label": "Breakeven", "value": f"${float(result['breakeven']):,.2f}", "tone": "neutral"})
+            tool_rows.append(["Breakeven", f"${float(result['breakeven']):,.2f} via {result.get('formula', 'contract math')}"])
         elif name == "calculate_max_loss" and result.get("status") == "ok":
             if result.get("max_loss") is not None:
                 response["summary_cards"].append({"label": "Max loss", "value": dollars(result.get("max_loss")), "tone": "risk"})
             if result.get("account_risk_pct") is not None:
                 response["summary_cards"].append({"label": "Acct risk", "value": f"{float(result['account_risk_pct']):.2f}%", "tone": "warn"})
+            if result.get("max_loss") is not None:
+                tool_rows.append(["Max loss", f"{dollars(result.get('max_loss'))} / {result.get('account_risk_pct', 'unknown')}% of account"])
+        elif name == "get_options_context":
+            status = str(result.get("status") or "unknown")
+            provider = str(result.get("provider") or "none")
+            pending = ", ".join((result.get("fields_pending") or [])[:3])
+            detail = f"{provider}: {status}"
+            if pending:
+                detail += f"; missing {pending}"
+            tool_rows.append(["Options data", detail])
+        elif name == "get_saved_trade" and result.get("status") == "ok":
+            report = result.get("report") or {}
+            tool_rows.append(["Saved check", report_title(report)])
+        elif name == "get_current_report":
+            tool_rows.append(["Selected check", report_title(result)])
 
     if response.get("mode") in {"general_finance", "concept"} and tool_context.get("ticker"):
         ticker = str(tool_context["ticker"]).upper()
@@ -472,6 +501,14 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
             )
 
     missing = response.get("missing_data") or []
+    if tool_rows:
+        response["visual_blocks"].append(
+            {
+                "type": "mini_table",
+                "title": "Context RiskWise used",
+                "rows": tool_rows[:6],
+            }
+        )
     if missing:
         response["visual_blocks"].append(
             {
@@ -615,6 +652,30 @@ def missing_trade_context_response() -> tuple[str, list[dict[str, Any]], list[di
 
 
 def attachment_needs_details_response(attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    extracted = extract_attachment_contract(attachments)
+    if extracted.get("ticker") and (extracted.get("strike") or extracted.get("premium") or extracted.get("expiration")):
+        fields = [
+            ["Ticker", str(extracted.get("ticker") or "Unknown")],
+            ["Side", str(extracted.get("side") or "Call/put not clear")],
+            ["Strike", dollars(extracted.get("strike")) if extracted.get("strike") is not None else "Missing"],
+            ["Expiration", str(extracted.get("expiration") or "Missing")],
+            ["Premium", exact_dollars(extracted.get("premium")) if extracted.get("premium") is not None else "Missing"],
+        ]
+        missing = [label for label, value in fields if value == "Missing" or "not clear" in value.lower()]
+        answer = (
+            f"I can read enough from the upload to start: {extracted.get('ticker')} {extracted.get('side') or 'option'}"
+            f"{' at ' + dollars(extracted.get('strike')) if extracted.get('strike') is not None else ''}. "
+            "The important part is still risk math: premium paid, contracts, expiration, bid/ask, and whether the event/IV setup can shrink the option price."
+        )
+        if missing:
+            answer += f" I still need {', '.join(missing[:3]).lower()} before treating this as a full review."
+        cards = [
+            {"label": "Upload read", "value": str(extracted.get("ticker")).upper(), "tone": "good"},
+            {"label": "Missing", "value": str(len(missing)), "tone": "warn" if missing else "good"},
+        ]
+        blocks = [{"type": "mini_table", "title": "Extracted contract", "rows": fields}]
+        return answer, cards, blocks
+
     names = ", ".join(str(item.get("name") or "attachment") for item in attachments[:2]) or "your upload"
     answer = (
         f"I see {names}. If the vision model is available, I can read the contract screenshot directly. If not, I need the key contract fields typed out: "
@@ -1161,10 +1222,11 @@ def sanitize_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, An
     for item in attachments[:4]:
         name = str(item.get("name") or "attachment")[:120]
         mime = str(item.get("type") or "")[:80]
+        source = str(item.get("source") or "file")[:40]
         size = int(item.get("size") or 0)
         text = str(item.get("text") or "")[:4000]
         data_url = str(item.get("dataUrl") or item.get("data_url") or "")
-        clean_item = {"name": name, "type": mime, "size": size}
+        clean_item = {"name": name, "type": mime, "source": source, "size": size}
         if text:
             clean_item["text"] = text
         if data_url.startswith("data:image/") and len(data_url) < 1_800_000:
@@ -1178,12 +1240,85 @@ def attachment_text_context(attachments: list[dict[str, Any]]) -> list[dict[str,
         {
             "name": item.get("name"),
             "type": item.get("type"),
+            "source": item.get("source"),
             "size": item.get("size"),
             "text": item.get("text", "")[:1500],
             "imageIncluded": bool(item.get("dataUrl")),
         }
         for item in attachments
     ]
+
+
+def attachment_source_summary(attachments: list[dict[str, Any]]) -> str:
+    sources = [str(item.get("source") or "file").replace("_", " ").title() for item in attachments]
+    if not sources:
+        return "None"
+    unique = []
+    for source in sources:
+        if source not in unique:
+            unique.append(source)
+    return ", ".join(unique[:2])
+
+
+def attachment_context_rows(attachments: list[dict[str, Any]]) -> list[list[str]]:
+    rows = []
+    for item in attachments[:4]:
+        kind = "Image" if str(item.get("type") or "").startswith("image/") else "File"
+        source = str(item.get("source") or "file").replace("_", " ").title()
+        readable = "Text readable" if item.get("text") else ("Image included" if item.get("dataUrl") else "Metadata only")
+        rows.append([str(item.get("name") or kind)[:28], f"{source}; {readable}"])
+    return rows or [["Attachment", "No readable context"]]
+
+
+def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    text = " ".join(str(item.get("text") or "") for item in attachments)
+    upper = text.upper()
+    if not upper.strip():
+        return {}
+    labeled_ticker = re.search(r"\b(?:TICKER|SYMBOL|UNDERLYING)\s*(?:IS|=|:)?\s*\$?([A-Z]{1,5})\b", upper)
+    ticker_match = labeled_ticker or re.search(r"(?<![A-Z])\$?([A-Z]{1,5})(?:\s+(?:CALL|PUT)|\s+\$?\d{1,4}(?:\.\d{1,2})?)", upper)
+    side = None
+    if re.search(r"\bCALL\b", upper):
+        side = "Call"
+    elif re.search(r"\bPUT\b", upper):
+        side = "Put"
+    strike = parse_attachment_number(text, ["strike", "strk"])
+    premium = parse_attachment_number(text, ["premium", "mid", "debit", "paid", "cost"])
+    if premium is None:
+        premium_match = re.search(r"(?:PREMIUM|MID|DEBIT|COST|PAID)\D{0,12}([0-9]+(?:\.[0-9]+)?)", upper)
+        premium = attachment_number_from_value(premium_match.group(1)) if premium_match else None
+    expiration = None
+    exp_match = re.search(r"(?:EXPIRATION|EXP|EXPIRES?)\D{0,12}([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
+    if exp_match:
+        expiration = exp_match.group(1)
+    return {
+        "ticker": ticker_match.group(1) if ticker_match else None,
+        "side": side,
+        "strike": strike,
+        "premium": premium,
+        "expiration": expiration,
+    }
+
+
+def parse_attachment_number(text: str, labels: list[str]) -> float | None:
+    for label in labels:
+        match = re.search(rf"{re.escape(label)}\s*(?:is|=|:)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
+        if match:
+            return attachment_number_from_value(match.group(1))
+    if labels[0] in {"strike", "strk"}:
+        match = re.search(r"\b(?:CALL|PUT)\s+\$?\s*([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
+        if match:
+            return attachment_number_from_value(match.group(1))
+    return None
+
+
+def attachment_number_from_value(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(str(value).replace("$", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def compact_profile(user_profile: dict[str, Any] | None) -> dict[str, Any]:
@@ -1444,6 +1579,14 @@ def dollars(value: Any) -> str:
     except (TypeError, ValueError):
         number = 0
     return f"${number:,.0f}"
+
+
+def exact_dollars(value: Any) -> str:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        number = 0
+    return f"${number:,.2f}"
 
 
 def suggested_prompts(current_report: dict[str, Any] | None = None) -> list[str]:

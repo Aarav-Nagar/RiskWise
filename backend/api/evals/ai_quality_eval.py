@@ -27,6 +27,8 @@ class EvalCase:
     current_report: dict[str, Any] | None = None
     user_profile: dict[str, Any] | None = None
     recent_checks: list[dict[str, Any]] = field(default_factory=list)
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    required_tool_any: list[str] = field(default_factory=list)
     notes: str = ""
 
 
@@ -143,6 +145,31 @@ CASES = [
         required_any=["spread", "risk", "single", "portfolio"],
         forbidden_any=["i can only", "outside my scope"],
         notes="RiskWise can answer normal finance basics without acting broken.",
+    ),
+    EvalCase(
+        id="text_attachment_extracts_contract",
+        message="Review this uploaded contract",
+        expected_mode="attachment_needs_details",
+        attachments=[
+            {
+                "name": "contract.txt",
+                "type": "text/plain",
+                "source": "files",
+                "size": 128,
+                "text": "Ticker: AAPL\nType: Call\nStrike: 200\nExpiration: Jun 21, 2026\nPremium: 2.15",
+            }
+        ],
+        required_any=["aapl", "$200", "$2.15", "expiration"],
+        forbidden_any=["need the key contract fields typed out"],
+        notes="Readable uploads should not be treated like empty screenshots.",
+    ),
+    EvalCase(
+        id="tool_context_quote_required",
+        message="What is happening with MSFT stock and options risk?",
+        required_any=["msft", "stock", "premium", "iv", "risk"],
+        required_tool_any=["get_quote"],
+        forbidden_any=["you should buy", "you should sell"],
+        notes="Market-context prompts should trigger quote tooling when available.",
     ),
 ]
 
@@ -307,8 +334,8 @@ def generated_cases() -> list[EvalCase]:
                     notes=f"Variation of {case.id}",
                 )
             )
-            if len(cases) + len(variations) >= 120:
-                return cases + variations[: 120 - len(cases)]
+            if len(cases) + len(variations) >= 180:
+                return cases + variations[: 180 - len(cases)]
     return cases + variations
 
 
@@ -365,6 +392,18 @@ def evaluate_response(case: EvalCase, response: dict[str, Any]) -> dict[str, Any
         words = count_words(answer)
         checks.append({"name": "max_words", "passed": words <= case.max_words, "expected": case.max_words, "actual": words})
 
+    if case.required_tool_any:
+        used = [str(item.get("name") or "") for item in response.get("tools_used") or []]
+        matched_tools = [tool for tool in case.required_tool_any if tool in used]
+        checks.append(
+            {
+                "name": "required_tool_any",
+                "passed": bool(matched_tools),
+                "expected_any": case.required_tool_any,
+                "actual_tools": used,
+            }
+        )
+
     passed = all(check["passed"] for check in checks)
     return {
         "id": case.id,
@@ -389,6 +428,7 @@ async def run_cases(limit: int | None = None) -> dict[str, Any]:
             current_report=case.current_report,
             user_profile=case.user_profile,
             chat_mode=case.chat_mode,
+            attachments=case.attachments,
             conversation_history=case.conversation_history,
             recent_checks=case.recent_checks,
         )

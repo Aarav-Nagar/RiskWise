@@ -242,11 +242,17 @@ async def chat(request: ChatRequest) -> ChatResponse:
     history = []
     if request.thread_id:
         history = store.list_chat_messages(request.user_id, request.thread_id)[-10:]
-    recent_checks = store.list_saved_checks(request.user_id)[:5]
+    stored_profile = store.get_user(request.user_id) or {}
+    profile_context = merge_profile_context(stored_profile, request.user_profile or {})
+    recent_checks = ranked_saved_checks(
+        store.list_saved_checks(request.user_id),
+        request.message,
+        request.current_report,
+    )
     coach = await answer_chat(
         request.message,
         current_report=request.current_report,
-        user_profile=request.user_profile,
+        user_profile=profile_context,
         chat_mode=request.chat_mode,
         attachments=request.attachments,
         conversation_history=history,
@@ -362,3 +368,45 @@ def rate_limit_identity(request: Request) -> str:
 
 def api_error(code: str, message: str, request_id: str) -> dict[str, str]:
     return {"code": code, "detail": message, "request_id": request_id}
+
+
+def merge_profile_context(stored: dict, incoming: dict) -> dict:
+    """Combine persisted profile memory with the current client snapshot."""
+    merged = {key: value for key, value in stored.items() if key not in {"passwordHash", "salt"}}
+    for key, value in (incoming or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        elif value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
+def ranked_saved_checks(checks: list[dict], message: str, current_report: dict | None) -> list[dict]:
+    """Prefer saved checks that match the user's ticker or selected context."""
+    wanted = ticker_hints(message, current_report)
+
+    def score(item: dict) -> tuple[int, str]:
+        report = item.get("report") if isinstance(item, dict) else {}
+        ticker = str((report or {}).get("ticker") or "").upper()
+        note = str(item.get("note") or "").upper()
+        relevance = 0
+        if ticker and ticker in wanted:
+            relevance += 6
+        if any(hint and hint in note for hint in wanted):
+            relevance += 2
+        if str((report or {}).get("tradeType") or "").lower() in message.lower():
+            relevance += 1
+        return relevance, str(item.get("createdAt") or "")
+
+    return sorted(checks, key=score, reverse=True)[:8]
+
+
+def ticker_hints(message: str, current_report: dict | None) -> set[str]:
+    hints: set[str] = set()
+    if current_report and current_report.get("ticker"):
+        hints.add(str(current_report["ticker"]).upper())
+    for token in message.replace("$", " ").replace("/", " ").split():
+        clean = "".join(char for char in token if char.isalpha()).upper()
+        if 1 <= len(clean) <= 5 and clean not in {"WHAT", "CALL", "PUT", "THE", "AND", "FOR", "RISK", "TRADE"}:
+            hints.add(clean)
+    return hints

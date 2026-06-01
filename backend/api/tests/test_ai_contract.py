@@ -334,6 +334,40 @@ def test_non_image_attachment_gets_contract_field_request() -> None:
     assert "premium" in response["answer"].lower()
 
 
+def test_readable_attachment_extracts_contract_details() -> None:
+    response = asyncio.run(
+        answer_chat(
+            "Review this uploaded contract",
+            attachments=[
+                {
+                    "name": "contract.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "size": 160,
+                    "text": "Ticker: AAPL\nType: Call\nStrike: 200\nExpiration: Jun 21, 2026\nPremium: 2.15",
+                }
+            ],
+        )
+    )
+    answer = response["answer"].lower()
+
+    assert response["mode"] == "attachment_needs_details"
+    assert "aapl" in answer
+    assert "$200" in str(response["visual_blocks"])
+    assert "$2.15" in str(response["visual_blocks"])
+    assert any(card["label"] == "Attachment" for card in response["summary_cards"])
+
+
+def test_tool_context_creates_visible_context_block() -> None:
+    response = asyncio.run(answer_chat("What is AAPL IV right now and what data do you need?"))
+    blocks = str(response["visual_blocks"]).lower()
+
+    assert response["tools_used"]
+    assert "context riskwise used" in blocks
+    assert "options data" in blocks
+    assert "missing live data" in blocks
+
+
 def test_trade_review_uses_attached_report() -> None:
     report = {
         "risk_posture": "Elevated",
