@@ -11,7 +11,7 @@ import { HomeScreen } from "./screens/HomeScreen";
 import { ProfileScreen } from "./screens/ProfileScreen";
 import { ReportScreen } from "./screens/ReportScreen";
 import { ChatScreen } from "./screens/ChatScreen";
-import { deleteRiskWiseAccount, lookupProfileByEmail, requestPasswordReset, syncClerkProfile, updateProfileSettings } from "./services/authService";
+import { clearRiskWiseContext, deleteRiskWiseAccount, lookupProfileByEmail, requestPasswordReset, syncClerkProfile, updateProfileSettings } from "./services/authService";
 import { generateTradeCheck, listSavedChecks, saveCheck } from "./services/apiClient";
 
 export default function App() {
@@ -314,6 +314,10 @@ export default function App() {
     if (!currentUser?.id) {
       throw new Error("No signed-in user.");
     }
+    if (isPreviewUser(currentUser)) {
+      await handleSignOut();
+      return;
+    }
     await deleteRiskWiseAccount(currentUser.id);
     try {
       if (clerkUser?.delete) {
@@ -329,9 +333,70 @@ export default function App() {
     if (!currentUser?.id) {
       throw new Error("No signed-in user.");
     }
+    if (isPreviewUser(currentUser)) {
+      const nextUser = deepMerge(currentUser, updates);
+      setCurrentUser(nextUser);
+      return nextUser;
+    }
     const nextUser = await updateProfileSettings(currentUser.id, updates);
     setCurrentUser(nextUser);
     return nextUser;
+  }
+
+  async function handleClearProfileContext() {
+    if (!currentUser?.id) {
+      throw new Error("No signed-in user.");
+    }
+    if (isPreviewUser(currentUser)) {
+      const nextUser = {
+        ...currentUser,
+        savedContext: {
+          savedChecks: false,
+          chatHistory: false,
+          uploadedScreenshots: false,
+          watchlist: false
+        }
+      };
+      setCurrentUser(nextUser);
+      setSavedChecks([]);
+      setCurrentReport(null);
+      return nextUser;
+    }
+    await clearRiskWiseContext(currentUser.id);
+    const nextUser = await updateProfileSettings(currentUser.id, {
+      savedContext: {
+        savedChecks: false,
+        chatHistory: false,
+        uploadedScreenshots: false,
+        watchlist: false
+      }
+    });
+    setCurrentUser(nextUser);
+    setSavedChecks([]);
+    setCurrentReport(null);
+    return nextUser;
+  }
+
+  async function handleProfilePasswordReset() {
+    if (!currentUser?.email) {
+      throw new Error("No profile email is available.");
+    }
+    if (isPreviewUser(currentUser)) {
+      return { email: maskEmail(currentUser.email), message: "Preview mode: password reset is wired for real Clerk accounts." };
+    }
+    try {
+      if (!signInState.isLoaded) {
+        throw new Error("Account service is still loading.");
+      }
+      await signInState.signIn.create({
+        strategy: "reset_password_email_code",
+        identifier: currentUser.email
+      });
+      setPendingPasswordReset({ email: currentUser.email });
+      return { email: maskEmail(currentUser.email), message: "Password reset email sent. Use the code from your inbox to choose a new password." };
+    } catch (err) {
+      return requestPasswordReset({ email: currentUser.email });
+    }
   }
 
   async function handlePasswordReset(form) {
@@ -492,7 +557,16 @@ async function restoreRiskWiseUserFromEmail(email, profile = {}, clerkId = email
       {activeTab === "Report" && (
         <ReportScreen report={currentReport} onAskAi={() => setActiveTab("Coach")} onSave={handleSaveCheck} saveStatus={saveStatus} />
       )}
-      {activeTab === "Profile" && <ProfileScreen user={currentUser} onSignOut={handleSignOut} onUpdateUser={handleUpdateProfile} onDeleteAccount={handleDeleteAccount} />}
+      {activeTab === "Profile" && (
+        <ProfileScreen
+          user={currentUser}
+          onSignOut={handleSignOut}
+          onUpdateUser={handleUpdateProfile}
+          onClearContext={handleClearProfileContext}
+          onDeleteAccount={handleDeleteAccount}
+          onPasswordReset={handleProfilePasswordReset}
+        />
+      )}
     </AppShell>
   );
 }
@@ -544,6 +618,22 @@ function isLocalPreviewSession() {
   const host = window.location.hostname;
   const local = host === "127.0.0.1" || host === "localhost";
   return local && new URLSearchParams(window.location.search).get("riskwise_preview") === "1";
+}
+
+function isPreviewUser(user) {
+  return user?.id === "preview-user" || user?.clerkId === "preview-local";
+}
+
+function deepMerge(base, patch) {
+  const result = { ...base };
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value && typeof value === "object" && !Array.isArray(value) && base?.[key] && typeof base[key] === "object" && !Array.isArray(base[key])) {
+      result[key] = { ...base[key], ...value };
+    } else {
+      result[key] = value;
+    }
+  });
+  return result;
 }
 
 function OnboardingNotice({ onDismiss }) {

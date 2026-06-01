@@ -46,7 +46,7 @@ export async function requestPasswordReset({ email }) {
 export async function updateProfileSettings(userId, updates) {
   const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/profile`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-RiskWise-User-ID": userId },
     body: JSON.stringify(updates)
   });
   const data = await response.json().catch(() => ({}));
@@ -56,9 +56,22 @@ export async function updateProfileSettings(userId, updates) {
   return data;
 }
 
+export async function clearRiskWiseContext(userId) {
+  const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context`, {
+    method: "DELETE",
+    headers: { "X-RiskWise-User-ID": userId }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(formatApiError(data, response, "Could not clear profile context."));
+  }
+  return data;
+}
+
 export async function deleteRiskWiseAccount(userId) {
   const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}`, {
-    method: "DELETE"
+    method: "DELETE",
+    headers: { "X-RiskWise-User-ID": userId }
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {

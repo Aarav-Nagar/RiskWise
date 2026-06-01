@@ -189,6 +189,15 @@ def delete_user(user_id: str) -> dict[str, str | bool]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.delete("/auth/users/{user_id}/context")
+def clear_user_context(user_id: str) -> dict[str, str | bool]:
+    require_request_user(user_id)
+    try:
+        return store.clear_user_context(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.post("/auth/forgot-password", response_model=ForgotPasswordResponse)
 def forgot_password(request: ForgotPasswordRequest) -> ForgotPasswordResponse:
     email = clean_email(request.email)

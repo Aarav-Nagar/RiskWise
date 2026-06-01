@@ -44,6 +44,7 @@ def profile_from_signup(payload: Any) -> dict[str, Any]:
         "riskRules": getattr(payload, "riskRules", {}) or {},
         "coachStyle": getattr(payload, "coachStyle", {}) or {},
         "savedContext": getattr(payload, "savedContext", {}) or {},
+        "appPreferences": getattr(payload, "appPreferences", {}) or {},
     }
 
 
@@ -114,6 +115,25 @@ class DemoStore:
             self.chat_messages.pop(thread_id, None)
         self.chat_feedback = [row for row in self.chat_feedback if row.get("userId") != user_id]
         return {"deleted": True, "userId": user_id, "deletedAt": utc_now()}
+
+    def clear_user_context(self, user_id: str) -> dict[str, Any]:
+        if user_id not in self.users:
+            raise ValueError("User profile was not found.")
+        self.saved_checks_by_user.pop(user_id, None)
+        self.trade_checks = {key: value for key, value in self.trade_checks.items() if value.get("userId") != user_id}
+        owned_threads = [thread_id for thread_id, row in self.chat_threads.items() if row.get("userId") == user_id]
+        for thread_id in owned_threads:
+            self.chat_threads.pop(thread_id, None)
+            self.chat_messages.pop(thread_id, None)
+        self.chat_feedback = [row for row in self.chat_feedback if row.get("userId") != user_id]
+        self.users[user_id]["savedContext"] = {
+            "savedChecks": False,
+            "chatHistory": False,
+            "uploadedScreenshots": False,
+            "watchlist": False,
+        }
+        self.users[user_id]["updatedAt"] = utc_now()
+        return {"cleared": True, "userId": user_id, "clearedAt": utc_now()}
 
     def sync_clerk_user(self, payload: Any) -> dict[str, Any]:
         email = clean_email(payload.email)
@@ -316,6 +336,36 @@ class MongoStore(DemoStore):
         self.db.chat_feedback.delete_many({"userId": user_id})
         return {"deleted": True, "userId": user_id, "deletedAt": utc_now()}
 
+    def clear_user_context(self, user_id: str) -> dict[str, Any]:
+        from pymongo import ReturnDocument
+
+        if not self.db.users.find_one({"id": user_id}, {"id": 1}):
+            raise ValueError("User profile was not found.")
+        self.db.saved_checks.delete_many({"userId": user_id})
+        self.db.trade_checks.delete_many({"userId": user_id})
+        thread_ids = [row["id"] for row in self.db.chat_threads.find({"userId": user_id}, {"id": 1})]
+        self.db.chat_threads.delete_many({"userId": user_id})
+        self.db.chat_messages.delete_many({"userId": user_id})
+        if thread_ids:
+            self.db.chat_messages.delete_many({"threadId": {"$in": thread_ids}})
+        self.db.chat_feedback.delete_many({"userId": user_id})
+        self.db.users.find_one_and_update(
+            {"id": user_id},
+            {
+                "$set": {
+                    "savedContext": {
+                        "savedChecks": False,
+                        "chatHistory": False,
+                        "uploadedScreenshots": False,
+                        "watchlist": False,
+                    },
+                    "updatedAt": utc_now(),
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        return {"cleared": True, "userId": user_id, "clearedAt": utc_now()}
+
     def sync_clerk_user(self, payload: Any) -> dict[str, Any]:
         email = clean_email(payload.email)
         profile = {
@@ -451,11 +501,18 @@ def public_document(record: dict[str, Any]) -> dict[str, Any]:
 def profile_update_fields(updates: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "experienceLevel",
+        "name",
+        "accountSize",
+        "riskBudgetPercent",
+        "purpose",
+        "tradeFocus",
         "riskStyle",
         "struggles",
+        "reminders",
         "sectors",
         "marketCaps",
         "events",
+        "safetyAccepted",
         "aiMemory",
         "riskRules",
         "coachStyle",

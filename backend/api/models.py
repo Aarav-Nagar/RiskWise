@@ -24,12 +24,19 @@ class ProfilePayload(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
+    name: str | None = None
+    accountSize: float | None = Field(default=None, gt=0)
+    riskBudgetPercent: float | None = Field(default=None, gt=0, le=25)
+    purpose: list[str] | None = None
+    tradeFocus: list[str] | None = None
     experienceLevel: str | None = None
     riskStyle: str | None = None
     struggles: list[str] | None = None
+    reminders: list[str] | None = None
     sectors: list[str] | None = None
     marketCaps: list[str] | None = None
     events: list[str] | None = None
+    safetyAccepted: bool | None = None
     aiMemory: dict[str, Any] | None = None
     riskRules: dict[str, Any] | None = None
     coachStyle: dict[str, Any] | None = None
