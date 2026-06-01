@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
-import { ConfidenceRing, IntelligenceStrip, MiniLineChart } from "../components/InsightVisuals";
+import { AgentRadar, ConfidenceRing, IntelligenceStrip, MiniLineChart, RiskBreakdownBars, ScenarioFanChart } from "../components/InsightVisuals";
 import { Pill } from "../components/Pill";
 import { Header, PrimaryButton, SecondaryButton, ScreenScroll, sharedText } from "../components/Shared";
 import { getOptionsContext } from "../services/apiClient";
@@ -58,6 +58,7 @@ export function ReportScreen({ report, onAskAi, onSave, saveStatus }) {
       />
 
       <Card style={styles.heroCard}>
+        <View pointerEvents="none" style={styles.heroGlow} />
         <View style={styles.heroTop}>
           <View style={styles.heroCopy}>
             <Text style={styles.overall}>{report.overallRead}</Text>
@@ -68,6 +69,7 @@ export function ReportScreen({ report, onAskAi, onSave, saveStatus }) {
         <View style={styles.heroChart}>
           <MiniLineChart data={buildConfidenceCurve(report)} height={78} />
         </View>
+        <ScenarioFanChart scenarios={report.scenarios} />
         <View style={styles.heroFooter}>
           <View style={styles.weakPill}>
             <Text style={styles.weakLabel}>Weakest Link</Text>
@@ -150,10 +152,14 @@ function OverviewPanel({ report, labelOpen, setLabelOpen }) {
 }
 
 function RiskMathPanel({ report }) {
+  const breakdown = buildRiskBreakdown(report);
   return (
     <Card>
       <Text style={sharedText.sectionTitle}>Risk Math</Text>
       <RiskCurve report={report} />
+      <Text style={styles.sectionMiniTitle}>Pressure Breakdown</Text>
+      <RiskBreakdownBars items={breakdown} />
+      <View style={styles.panelDivider} />
       <View style={styles.mathGrid}>
         <MathItem label="Max loss" value={money(report.riskMath.max_loss)} />
         <MathItem label="50% drawdown" value={money(report.riskMath.half_premium_drawdown)} risk />
@@ -212,6 +218,7 @@ function AgentsPanel({ report }) {
     <Card>
       <Text style={sharedText.sectionTitle}>Review Panel</Text>
       <Text style={styles.agentPanelSub}>Each agent scores a different failure mode. The useful part is disagreement, not fake certainty.</Text>
+      <AgentRadar agents={report.agentDocket} />
       {report.agentDocket.map((agent) => (
         <AgentRow key={agent.name} agent={agent} />
       ))}
@@ -391,6 +398,21 @@ function buildConfidenceCurve(report) {
   ];
 }
 
+function buildRiskBreakdown(report) {
+  const risk = Number(report.riskMath?.risk_percent_of_account || report.decisionSnapshot?.risk_budget_used || 2);
+  const days = Number(report.riskMath?.trading_days_left || 15);
+  const requiredMove = Number(report.riskMath?.required_move_to_breakeven_pct || 8);
+  const optionsStructure = Number(report.decisionSnapshot?.options_structure || report.setupScore || 60);
+  const dataGaps = Number(report.dataQuality?.missing?.length || 2);
+  return [
+    { label: "Position size", value: Math.min(100, 24 + risk * 18), tone: risk > 2 ? "risk" : "good" },
+    { label: "Time decay", value: Math.min(100, 86 - Math.min(days, 45)), tone: days < 12 ? "risk" : "warn" },
+    { label: "Breakeven move", value: Math.min(100, 28 + requiredMove * 5), tone: requiredMove > 10 ? "risk" : "warn" },
+    { label: "Contract structure", value: Math.max(12, 100 - optionsStructure), tone: optionsStructure < 60 ? "risk" : "good" },
+    { label: "Missing data", value: Math.min(100, 22 + dataGaps * 14), tone: dataGaps > 3 ? "risk" : "warn" }
+  ];
+}
+
 const styles = StyleSheet.create({
   methodology: {
     backgroundColor: "#F3FBFF",
@@ -408,7 +430,21 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     backgroundColor: "#FBFFFC",
-    borderColor: "#CFEFD8"
+    borderColor: "#CFEFD8",
+    overflow: "hidden",
+    shadowColor: palette.green,
+    shadowOpacity: 0.15,
+    shadowRadius: 34,
+    shadowOffset: { width: 0, height: 18 }
+  },
+  heroGlow: {
+    position: "absolute",
+    width: 210,
+    height: 210,
+    borderRadius: 105,
+    right: -82,
+    top: -76,
+    backgroundColor: "rgba(22,163,74,0.12)"
   },
   heroTop: {
     flexDirection: "row",
@@ -641,7 +677,14 @@ const styles = StyleSheet.create({
   mathGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 9
+    gap: 9,
+    marginTop: 4
+  },
+  sectionMiniTitle: {
+    color: palette.dark,
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 2
   },
   riskCurve: {
     borderRadius: 18,

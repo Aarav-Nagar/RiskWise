@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { listChatMessages, listChatThreads, sendChatMessage } from "../services/apiClient";
 import { palette } from "../theme/theme";
@@ -17,6 +17,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
   const [selectedTrade, setSelectedTrade] = useState(currentReport || null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [attachments, setAttachments] = useState([]);
+  const [uploadStatus, setUploadStatus] = useState("");
   const scrollRef = useRef(null);
   const tradeOptions = useMemo(() => buildTradeOptions(currentReport, savedChecks), [currentReport, savedChecks]);
 
@@ -39,6 +40,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     const messageText = clean || "Review these attachments.";
     setInput("");
     setAttachments([]);
+    setUploadStatus("");
     setMessages((items) => [...items, { role: "user", content: messageText, attachments: outgoingAttachments }]);
     setLoading(true);
     try {
@@ -64,7 +66,8 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
           missingData: response.missing_data || [],
           riskFlags: response.risk_flags || [],
           toolsUsed: response.tools_used || [],
-          summaryCards: response.summary_cards || []
+          summaryCards: response.summary_cards || [],
+          visualBlocks: response.visual_blocks || []
         }
       ]);
     } catch (err) {
@@ -144,8 +147,10 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     inputEl.accept = "image/*,.txt,.csv,.pdf";
     inputEl.onchange = async () => {
       const files = Array.from(inputEl.files || []).slice(0, 4);
+      setUploadStatus(files.length ? "Reading upload..." : "");
       const parsed = await Promise.all(files.map(readAttachment));
       setAttachments((items) => [...items, ...parsed].slice(0, 4));
+      setUploadStatus(parsed.length ? `${parsed.length} file${parsed.length === 1 ? "" : "s"} attached. Ask RiskWiseAI to review them.` : "");
     };
     inputEl.click();
   }
@@ -209,8 +214,9 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
 
       <View style={styles.composerWrap}>
         {attachments.length ? <AttachmentTray attachments={attachments} onRemove={(index) => setAttachments((items) => items.filter((_, i) => i !== index))} /> : null}
+        {uploadStatus ? <Text style={styles.uploadStatus}>{uploadStatus}</Text> : null}
         <View style={styles.inputRow}>
-          <Pressable style={styles.plusButton} onPress={attachFile}>
+          <Pressable accessibilityLabel="Add attachment" style={styles.plusButton} onPress={attachFile}>
             <Ionicons name="add" size={22} color={palette.green} />
           </Pressable>
           <TextInput
@@ -223,7 +229,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
             returnKeyType="send"
             multiline
           />
-          <Pressable style={[styles.sendButton, (!input.trim() && !attachments.length || loading) && styles.sendDisabled]} onPress={() => submit()}>
+          <Pressable accessibilityLabel="Send message" style={[styles.sendButton, (!input.trim() && !attachments.length || loading) && styles.sendDisabled]} onPress={() => submit()}>
             <Ionicons name="arrow-up" size={18} color="#FFFFFF" />
           </Pressable>
         </View>
@@ -240,7 +246,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
 
 function MessageBubble({ message }) {
   const isUser = message.role === "user";
-  const hasMeta = !isUser && (message.missingData?.length || message.riskFlags?.length || message.summaryCards?.length || message.toolsUsed?.length);
+  const hasMeta = !isUser && (message.missingData?.length || message.riskFlags?.length || message.summaryCards?.length || message.toolsUsed?.length || message.visualBlocks?.length);
   return (
     <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
       <Text style={[styles.bubbleText, isUser && styles.userBubbleText]}>{message.content}</Text>
@@ -286,6 +292,44 @@ function AssistantMetadata({ message }) {
           <Text style={styles.metaText}>Checked: {message.toolsUsed.map((tool) => tool.name.replace("get_", "")).slice(0, 3).join(", ")}</Text>
         </View>
       ) : null}
+      {message.visualBlocks?.length ? <AssistantVisualBlocks blocks={message.visualBlocks} /> : null}
+    </View>
+  );
+}
+
+function AssistantVisualBlocks({ blocks }) {
+  return (
+    <View style={styles.visualBlocks}>
+      {blocks.slice(0, 3).map((block, index) => {
+        if (block.type === "score_bar") {
+          const value = Math.max(0, Math.min(100, Number(block.value || 0)));
+          return (
+            <View key={`${block.title}-${index}`} style={styles.visualBlock}>
+              <View style={styles.visualHeader}>
+                <Text style={styles.visualTitle}>{block.title}</Text>
+                <Text style={styles.visualValue}>{value}/100</Text>
+              </View>
+              <View style={styles.visualTrack}>
+                <View style={[styles.visualFill, { width: `${value}%`, backgroundColor: block.tone === "risk" ? palette.red : block.tone === "warn" ? palette.teal : palette.green }]} />
+              </View>
+            </View>
+          );
+        }
+        if (block.type === "mini_table") {
+          return (
+            <View key={`${block.title}-${index}`} style={styles.visualBlock}>
+              <Text style={styles.visualTitle}>{block.title}</Text>
+              {(block.rows || []).slice(0, 4).map((row) => (
+                <View key={`${row[0]}-${row[1]}`} style={styles.visualRow}>
+                  <Text style={styles.visualKey}>{row[0]}</Text>
+                  <Text style={styles.visualCell}>{row[1]}</Text>
+                </View>
+              ))}
+            </View>
+          );
+        }
+        return null;
+      })}
     </View>
   );
 }
@@ -318,8 +362,15 @@ function AttachmentTray({ attachments, onRemove }) {
     <View style={styles.attachmentTray}>
       {attachments.map((item, index) => (
         <View key={`${item.name}-${index}`} style={styles.pendingAttachment}>
-          <Ionicons name={item.type?.startsWith("image/") ? "image-outline" : "document-text-outline"} size={14} color={palette.green} />
-          <Text style={styles.pendingAttachmentText} numberOfLines={1}>{item.name}</Text>
+          {item.dataUrl ? (
+            <Image source={{ uri: item.dataUrl }} style={styles.attachmentThumb} />
+          ) : (
+            <Ionicons name={item.type?.startsWith("image/") ? "image-outline" : "document-text-outline"} size={14} color={palette.green} />
+          )}
+          <View style={styles.pendingAttachmentCopy}>
+            <Text style={styles.pendingAttachmentText} numberOfLines={1}>{item.name}</Text>
+            <Text style={styles.pendingAttachmentMeta}>{formatBytes(item.size)} {item.text ? "- text ready" : item.dataUrl ? "- image ready" : "- metadata only"}</Text>
+          </View>
           <Pressable onPress={() => onRemove(index)}>
             <Ionicons name="close" size={14} color={palette.muted} />
           </Pressable>
@@ -363,6 +414,13 @@ function readAsDataUrl(file) {
     reader.onerror = () => resolve("");
     reader.readAsDataURL(file);
   });
+}
+
+function formatBytes(size) {
+  const number = Number(size || 0);
+  if (number < 1024) return `${number} B`;
+  if (number < 1024 * 1024) return `${(number / 1024).toFixed(1)} KB`;
+  return `${(number / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function initialGreeting(user) {
@@ -638,6 +696,64 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#EEF4EF"
   },
+  visualBlocks: {
+    gap: 8,
+    marginTop: 3
+  },
+  visualBlock: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#DDEBDF",
+    backgroundColor: "#FBFFFC",
+    padding: 10
+  },
+  visualHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 7
+  },
+  visualTitle: {
+    color: palette.dark,
+    fontSize: 11,
+    fontWeight: "900"
+  },
+  visualValue: {
+    color: palette.green,
+    fontSize: 11,
+    fontWeight: "900"
+  },
+  visualTrack: {
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: "#EAF1EA",
+    overflow: "hidden"
+  },
+  visualFill: {
+    height: "100%",
+    borderRadius: 999
+  },
+  visualRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 10,
+    borderTopWidth: 1,
+    borderTopColor: "#EAF2EA",
+    paddingTop: 7,
+    marginTop: 7
+  },
+  visualKey: {
+    color: palette.muted,
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  visualCell: {
+    flex: 1,
+    color: palette.dark,
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "right"
+  },
   metaCards: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -718,11 +834,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
     paddingVertical: 6
   },
+  attachmentThumb: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: "#EAF1EA"
+  },
+  pendingAttachmentCopy: {
+    maxWidth: 235
+  },
   pendingAttachmentText: {
     maxWidth: 210,
     color: palette.dark,
     fontSize: 11,
     fontWeight: "800"
+  },
+  pendingAttachmentMeta: {
+    color: palette.muted,
+    fontSize: 8,
+    fontWeight: "800",
+    marginTop: 1
+  },
+  uploadStatus: {
+    color: palette.green,
+    fontSize: 10,
+    fontWeight: "900",
+    marginBottom: 6,
+    paddingLeft: 7
   },
   inputRow: {
     flexDirection: "row",
