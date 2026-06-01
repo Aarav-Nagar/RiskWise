@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from api.app import app
+from api.services import market_data
 
 
 client = TestClient(app)
@@ -41,8 +42,8 @@ def test_options_context_is_honest_about_missing_contract_feed() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["ticker"] == "AAPL"
-    assert "option_chain" in body["fields_pending"]
-    assert "tradier" in body["message"].lower() or "polygon" in body["message"].lower()
+    assert "live_premium" in body["fields_pending"] or "option_chain" in body["fields_pending"]
+    assert "polygon" in body["message"].lower() or "tradier" in body["message"].lower() or "massive" in body["message"].lower()
 
 
 def test_options_chain_endpoint_does_not_fake_contracts() -> None:
@@ -50,8 +51,30 @@ def test_options_chain_endpoint_does_not_fake_contracts() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "requires_options_provider"
-    assert body["contracts"] == []
+    if body["provider"] == "massive_polygon_reference":
+        assert body["status"] in {"reference_chain_ready", "reference_chain_empty"}
+        assert "premium" not in str(body["contracts"]).lower()
+    else:
+        assert body["status"] == "requires_options_provider"
+        assert body["contracts"] == []
+
+
+def test_polygon_reference_contracts_normalize_without_live_quote() -> None:
+    contract = market_data.normalize_polygon_contract(
+        {
+            "ticker": "O:AAPL260621C00200000",
+            "underlying_ticker": "AAPL",
+            "contract_type": "call",
+            "expiration_date": "2026-06-21",
+            "strike_price": 200,
+            "shares_per_contract": 100,
+            "exercise_style": "american",
+        }
+    )
+
+    assert contract["contract_symbol"] == "O:AAPL260621C00200000"
+    assert contract["contract_type"] == "call"
+    assert contract["has_live_quote"] is False
 
 
 def test_trade_check_rejects_past_expiration() -> None:

@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
 import { ErrorCard, Header, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
-import { getMarketBundle, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
+import { getMarketBundle, getOptionsChain, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
 const popularSymbols = ["AAPL", "NVDA", "SPY", "MSFT", "QQQ"];
@@ -99,6 +99,8 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
   const [searching, setSearching] = useState(false);
   const [market, setMarket] = useState(null);
   const [expirations, setExpirations] = useState([]);
+  const [contractReferences, setContractReferences] = useState([]);
+  const [contractProviderMessage, setContractProviderMessage] = useState("");
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(parseDate(draft.expiration) || addDays(new Date(), 30)));
   const [runningProgress, setRunningProgress] = useState(0);
   const [localReport, setLocalReport] = useState(null);
@@ -164,6 +166,32 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
       cancelled = true;
     };
   }, [selectedTicker?.symbol]);
+
+  useEffect(() => {
+    const symbol = selectedTicker?.symbol;
+    if (!symbol || !draft.expiration) {
+      setContractReferences([]);
+      setContractProviderMessage("");
+      return undefined;
+    }
+    let cancelled = false;
+    getOptionsChain({ ticker: symbol, expiration: draft.expiration })
+      .then((chain) => {
+        if (cancelled) return;
+        const rows = Array.isArray(chain?.contracts) ? chain.contracts : [];
+        setContractReferences(rows.slice(0, 80));
+        setContractProviderMessage(chain?.message || "");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setContractReferences([]);
+          setContractProviderMessage("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTicker?.symbol, draft.expiration]);
 
   function updateDraft(updates) {
     setDraft((current) => ({ ...current, ...updates }));
@@ -348,6 +376,20 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
             draft={draft}
             setNumericField={setNumericField}
             validation={optionValidation}
+            contractReferences={contractReferences}
+            providerMessage={contractProviderMessage}
+            onSelectContract={(contract) => {
+              if (!contract) return;
+              updateDraft({
+                strike: String(contract.strike_price || contract.strike || draft.strike || ""),
+                optionSide: contract.contract_type || draft.optionSide,
+                structure: contract.contract_type || draft.structure,
+                tradeType: tradeTypeFromStructure(contract.contract_type || draft.structure),
+                contractSymbol: contract.contract_symbol || contract.ticker || "",
+                expiration: contract.expiration_date || draft.expiration,
+                expirationSource: "market_contract_reference"
+              });
+            }}
             onContinue={() => setStep(6)}
           />
         )}
@@ -600,7 +642,7 @@ function SearchBox({ query, setQuery, results, searching, selectedTicker, onSele
 function TickerCard({ ticker, market }) {
   const quote = market?.quote;
   const price = quote?.price || mockPrice(ticker.symbol);
-  const change = quote?.change_percent ?? mockChange(ticker.symbol);
+  const change = quote?.changePercentage ?? quote?.change_percent ?? mockChange(ticker.symbol);
   return (
     <Card style={styles.tickerCard}>
       <View style={styles.symbolLogo}>
@@ -713,11 +755,48 @@ function MiniCalendar({ visibleMonth, selected, setVisibleMonth, onSelect }) {
   );
 }
 
-function ContractDetailsStep({ draft, setNumericField, validation, onContinue }) {
+function ContractDetailsStep({ draft, setNumericField, validation, contractReferences = [], providerMessage = "", onSelectContract, onContinue }) {
   const requiredReady = !validation.strike && !validation.premium;
+  const side = draft.optionSide || (draft.structure?.includes("put") ? "put" : "call");
+  const referenceRows = contractReferences
+    .filter((contract) => !side || contract.contract_type === side)
+    .slice(0, 8);
   return (
     <View>
       <StepTitle title="Contract Details" subtitle="Enter the contract price and key details." />
+      {referenceRows.length ? (
+        <Card style={styles.referenceCard}>
+          <View style={styles.rowBetween}>
+            <View style={styles.flex}>
+              <Text style={styles.referenceTitle}>Real contract references</Text>
+              <Text style={styles.referenceSub}>Tap a strike to attach the exchange contract symbol. Premium and IV still need live quote access or manual entry.</Text>
+            </View>
+            <Ionicons name="shield-checkmark-outline" size={19} color={palette.green} />
+          </View>
+          <View style={styles.referenceGrid}>
+            {referenceRows.map((contract) => {
+              const active = Number(contract.strike_price) === Number(draft.strike) && contract.contract_type === side;
+              return (
+                <Pressable
+                  key={contract.contract_symbol || `${contract.contract_type}-${contract.strike_price}`}
+                  style={[styles.referenceChip, active && styles.referenceChipActive]}
+                  onPress={() => onSelectContract?.(contract)}
+                >
+                  <Text style={[styles.referenceChipText, active && styles.referenceChipTextActive]}>
+                    {contract.contract_type === "put" ? "P" : "C"} ${Number(contract.strike_price || 0).toFixed(0)}
+                  </Text>
+                  <Text style={[styles.referenceChipSub, active && styles.referenceChipTextActive]}>{contract.moneynessLabel || "reference"}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Card>
+      ) : providerMessage ? (
+        <Card style={styles.referenceCard}>
+          <Text style={styles.referenceTitle}>Contract reference status</Text>
+          <Text style={styles.referenceSub}>{providerMessage}</Text>
+        </Card>
+      ) : null}
       <FieldRow label="Strike Price" value={draft.strike} onChangeText={(value) => setNumericField("strike", value)} prefix="$" error={validation.strike} />
       <FieldRow label="Premium (Mid)" value={draft.premium} onChangeText={(value) => setNumericField("premium", value)} prefix="$" error={validation.premium} />
       <FieldRow label="Bid" value={draft.bid} onChangeText={(value) => setNumericField("bid", value)} prefix="$" />
@@ -1483,6 +1562,15 @@ const styles = StyleSheet.create({
   dayText: { color: palette.dark, fontSize: 10, fontWeight: "900" },
   dayTextActive: { color: "#FFFFFF" },
   fieldRow: { minHeight: 54, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: 1, borderBottomColor: "#EEF2EF", paddingVertical: 8 },
+  referenceCard: { backgroundColor: "#FBFFFC", borderColor: "#D7F0DE", padding: 12 },
+  referenceTitle: { color: palette.dark, fontSize: 12, fontWeight: "900" },
+  referenceSub: { color: palette.muted, fontSize: 10, lineHeight: 15, fontWeight: "800", marginTop: 3 },
+  referenceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 11 },
+  referenceChip: { width: "23%", minHeight: 54, borderRadius: 14, borderWidth: 1, borderColor: palette.border, backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", padding: 6 },
+  referenceChipActive: { backgroundColor: palette.green, borderColor: palette.green },
+  referenceChipText: { color: palette.dark, fontSize: 11, fontWeight: "900" },
+  referenceChipSub: { color: palette.muted, fontSize: 8, fontWeight: "800", marginTop: 2, textAlign: "center" },
+  referenceChipTextActive: { color: "#FFFFFF" },
   fieldLabel: { color: palette.muted, fontSize: 11, fontWeight: "900" },
   compactInput: { width: 150, minHeight: 38, borderRadius: 12, borderWidth: 1, borderColor: palette.border, backgroundColor: "#FBFCFB", flexDirection: "row", alignItems: "center", paddingHorizontal: 9 },
   inputError: { borderColor: palette.red, backgroundColor: "#FFFBFB" },

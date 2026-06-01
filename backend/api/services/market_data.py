@@ -5,6 +5,7 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any
 
@@ -21,10 +22,13 @@ from api.settings import settings
 
 
 READY_FIELDS = ["ticker", "provider_status", "quote", "company_profile", "earnings_calendar", "stock_news"]
+OPTIONS_REFERENCE_FIELDS = ["option_contract_reference", "expiration_dates", "strike_ladder", "contract_symbols"]
+OPTIONS_LIVE_PENDING_FIELDS = ["live_premium", "bid_ask", "implied_volatility", "greeks", "liquidity_snapshot", "breakeven_from_real_premium"]
 PENDING_FIELDS = ["option_chain", "implied_volatility", "expiration_dates", "live_premium", "breakeven_from_real_premium"]
 FMP_STABLE_BASE = "https://financialmodelingprep.com/stable"
 YAHOO_RSS_BASE = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 _FMP_CACHE: dict[str, tuple[float, Any]] = {}
+_POLYGON_CACHE: dict[str, tuple[float, Any]] = {}
 FALLBACK_SYMBOLS = [
     {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "exchange": "NYSE Arca", "sector": "ETF"},
     {"symbol": "QQQ", "name": "Invesco QQQ Trust", "exchange": "NASDAQ", "sector": "ETF"},
@@ -274,6 +278,21 @@ async def earnings_calendar(ticker: str) -> EarningsResponse:
 async def options_context(ticker: str) -> OptionsContextResponse:
     symbol = clean_symbol(ticker)
     provider = settings.market_data_provider or "disabled"
+    if polygon_enabled():
+        expirations, _contracts = polygon_option_reference(symbol, limit=10)
+        status = "options_reference_ready" if expirations else "options_provider_configured"
+        return OptionsContextResponse(
+            ticker=symbol,
+            status=status,
+            provider="massive_polygon_reference",
+            fields_ready=READY_FIELDS + OPTIONS_REFERENCE_FIELDS,
+            fields_pending=OPTIONS_LIVE_PENDING_FIELDS,
+            message=(
+                "Massive/Polygon option-contract reference is enabled, so RiskWise can attach real expirations, strikes, "
+                "and contract symbols. Your current key does not expose live option snapshots in this environment, so live "
+                "premium, IV, Greeks, bid/ask, volume, and open interest still stay marked as missing instead of being guessed."
+            ),
+        )
     if fmp_enabled():
         return OptionsContextResponse(
             ticker=symbol,
@@ -303,6 +322,21 @@ async def options_context(ticker: str) -> OptionsContextResponse:
 async def options_expirations(ticker: str) -> OptionsAvailabilityResponse:
     symbol = clean_symbol(ticker)
     quote = await market_quote(symbol)
+    if polygon_enabled():
+        expirations, contracts = polygon_option_reference(symbol, limit=1000)
+        if expirations:
+            return OptionsAvailabilityResponse(
+                ticker=symbol,
+                status="reference_expirations_ready",
+                provider="massive_polygon_reference",
+                expirations=expirations[:16],
+                contracts=contracts[:30],
+                quote=quote.model_dump(),
+                message=(
+                    "These are real option expiration dates from the Massive/Polygon contract reference feed. "
+                    "Live premium, IV, Greeks, and liquidity still require an option snapshot entitlement."
+                ),
+            )
     return OptionsAvailabilityResponse(
         ticker=symbol,
         status="estimated_calendar",
@@ -319,6 +353,24 @@ async def options_expirations(ticker: str) -> OptionsAvailabilityResponse:
 async def options_chain(ticker: str, expiration: str | None = None) -> OptionsAvailabilityResponse:
     symbol = clean_symbol(ticker)
     quote, profile, earnings = await gather_contract_context(symbol)
+    if polygon_enabled():
+        expirations, contracts = polygon_option_reference(symbol, expiration=expiration, limit=250)
+        contracts = enrich_reference_contracts(contracts, quote.price)
+        status = "reference_chain_ready" if contracts else "reference_chain_empty"
+        return OptionsAvailabilityResponse(
+            ticker=symbol,
+            status=status,
+            provider="massive_polygon_reference",
+            expirations=expirations[:16] if expirations else standard_monthly_expirations(),
+            contracts=contracts[:120],
+            quote=quote.model_dump(),
+            profile=profile.model_dump(),
+            earnings=[item.model_dump() for item in earnings.items],
+            message=(
+                "RiskWise attached real option contract references from Massive/Polygon. This is not a live quote chain: "
+                "premium, bid/ask, IV, Greeks, volume, and open interest are unavailable on the current entitlement and remain user-confirmed fields."
+            ),
+        )
     return OptionsAvailabilityResponse(
         ticker=symbol,
         status="requires_options_provider",
@@ -343,32 +395,47 @@ async def options_contract_context(
 ) -> OptionsAvailabilityResponse:
     symbol = clean_symbol(ticker)
     quote, profile, earnings = await gather_contract_context(symbol)
+    option_type = normalize_side(option_side)
+    selected_contract: dict[str, Any] = {}
+    expiration_rows: list[str] = []
+    contracts: list[dict[str, Any]] = []
+    if polygon_enabled():
+        expiration_rows, contracts = polygon_option_reference(symbol, expiration=expiration, option_type=option_type, limit=250)
+        contracts = enrich_reference_contracts(contracts, quote.price)
+        selected_contract = choose_contract_reference(contracts, expiration, strike, option_type)
     selected: dict[str, Any] = {
         "symbol": symbol,
         "expiration": expiration or "",
         "strike": strike,
-        "optionSide": normalize_side(option_side),
-        "source": "user_input_plus_underlying_context",
+        "optionSide": option_type,
+        "source": "polygon_reference_plus_underlying_context" if selected_contract else "user_input_plus_underlying_context",
         "underlyingPrice": quote.price,
-        "providerHasLiveOptionChain": False,
+        "providerHasLiveOptionChain": bool(selected_contract),
+        "providerHasLivePremium": False,
     }
+    if selected_contract:
+        selected.update(selected_contract)
+        selected["strike"] = selected_contract.get("strike_price") or selected.get("strike")
+        selected["expiration"] = selected_contract.get("expiration_date") or selected.get("expiration")
     if quote.price and strike:
         moneyness = round((strike - quote.price) / quote.price * 100, 2)
         selected["moneynessPct"] = moneyness
-        selected["moneynessLabel"] = "near the money" if abs(moneyness) <= 3 else "out of the money" if (moneyness > 0 and selected["optionSide"] == "call") or (moneyness < 0 and selected["optionSide"] == "put") else "in the money"
+        selected["moneynessLabel"] = moneyness_label(moneyness, selected["optionSide"])
     return OptionsAvailabilityResponse(
         ticker=symbol,
-        status="partial_contract_context",
-        provider="financialmodelingprep+riskwise_estimator",
-        expirations=standard_monthly_expirations(),
-        contracts=[],
+        status="reference_contract_matched" if selected_contract else "partial_contract_context",
+        provider="massive_polygon_reference+financialmodelingprep" if polygon_enabled() else "financialmodelingprep+riskwise_estimator",
+        expirations=expiration_rows[:16] if expiration_rows else standard_monthly_expirations(),
+        contracts=contracts[:30],
         selected=selected,
         quote=quote.model_dump(),
         profile=profile.model_dump(),
         earnings=[item.model_dump() for item in earnings.items],
         message=(
-            "RiskWise attached real stock quote/profile/earnings context, but live premium, IV, Greeks, bid/ask, "
-            "volume, and open interest still require a dedicated options-chain provider."
+            "RiskWise matched the requested contract against real Massive/Polygon option-reference data, but live premium, IV, "
+            "Greeks, bid/ask, volume, and open interest are not available on the current entitlement."
+            if selected_contract
+            else "RiskWise attached real stock quote/profile/earnings context, but live premium, IV, Greeks, bid/ask, volume, and open interest still require an options snapshot entitlement."
         ),
     )
 
@@ -381,7 +448,11 @@ async def gather_contract_context(symbol: str):
 
 
 def fmp_enabled() -> bool:
-    return settings.market_data_provider == "fmp" and bool(settings.fmp_api_key)
+    return settings.market_data_provider in {"fmp", "polygon", "massive", "hybrid"} and bool(settings.fmp_api_key)
+
+
+def polygon_enabled() -> bool:
+    return settings.market_data_provider in {"polygon", "massive", "hybrid"} and bool(settings.polygon_api_key)
 
 
 def standard_monthly_expirations(today: date | None = None, count: int = 8) -> list[str]:
@@ -409,6 +480,91 @@ def normalize_side(option_side: str | None) -> str:
     return clean if clean in {"call", "put"} else "call"
 
 
+def polygon_option_reference(
+    symbol: str,
+    *,
+    expiration: str | None = None,
+    option_type: str | None = None,
+    limit: int = 250,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    params = {"underlying_ticker": clean_symbol(symbol), "limit": str(min(max(limit, 1), 1000))}
+    if expiration:
+        params["expiration_date"] = expiration
+    else:
+        params["expiration_date.gte"] = date.today().isoformat()
+    if option_type in {"call", "put"}:
+        params["contract_type"] = option_type
+    try:
+        data = polygon_get("/v3/reference/options/contracts", params)
+    except Exception:
+        return [], []
+    rows = data.get("results") if isinstance(data, dict) else []
+    contracts = [normalize_polygon_contract(row) for row in rows if isinstance(row, dict)]
+    expirations = sorted({str(row.get("expiration_date") or "") for row in contracts if row.get("expiration_date")})
+    return expirations, contracts
+
+
+def normalize_polygon_contract(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "contract_symbol": str(row.get("ticker") or ""),
+        "ticker": str(row.get("ticker") or ""),
+        "underlying_ticker": str(row.get("underlying_ticker") or ""),
+        "contract_type": str(row.get("contract_type") or ""),
+        "optionSide": str(row.get("contract_type") or ""),
+        "expiration_date": str(row.get("expiration_date") or ""),
+        "strike_price": number_or_none(row.get("strike_price")),
+        "exercise_style": str(row.get("exercise_style") or ""),
+        "shares_per_contract": int(number_or_none(row.get("shares_per_contract")) or 100),
+        "primary_exchange": str(row.get("primary_exchange") or ""),
+        "source": "massive_polygon_reference",
+        "has_live_quote": False,
+    }
+
+
+def enrich_reference_contracts(contracts: list[dict[str, Any]], underlying_price: float | None) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for contract in contracts:
+        grouped[str(contract.get("expiration_date") or "")].append(contract)
+    enriched: list[dict[str, Any]] = []
+    for expiration, rows in grouped.items():
+        rows.sort(key=lambda row: abs(float(row.get("strike_price") or 0) - float(underlying_price or row.get("strike_price") or 0)))
+        enriched.extend(rows)
+    for contract in enriched:
+        strike = contract.get("strike_price")
+        side = contract.get("contract_type") or "call"
+        if underlying_price and strike:
+            moneyness = round((float(strike) - underlying_price) / underlying_price * 100, 2)
+            contract["moneynessPct"] = moneyness
+            contract["moneynessLabel"] = moneyness_label(moneyness, side)
+    return enriched
+
+
+def choose_contract_reference(
+    contracts: list[dict[str, Any]],
+    expiration: str | None,
+    strike: float | None,
+    option_type: str,
+) -> dict[str, Any]:
+    candidates = [
+        contract
+        for contract in contracts
+        if (not expiration or contract.get("expiration_date") == expiration)
+        and (not option_type or contract.get("contract_type") == option_type)
+    ]
+    if not candidates:
+        return {}
+    if strike is None:
+        return candidates[0]
+    return min(candidates, key=lambda contract: abs(float(contract.get("strike_price") or 0) - strike))
+
+
+def moneyness_label(moneyness: float, option_side: str) -> str:
+    if abs(moneyness) <= 3:
+        return "near the money"
+    out_of_money = (moneyness > 0 and option_side == "call") or (moneyness < 0 and option_side == "put")
+    return "out of the money" if out_of_money else "in the money"
+
+
 def fmp_get(path: str, params: dict[str, str]) -> Any:
     cache_key = json.dumps([path, sorted(params.items())], sort_keys=True)
     now = time.monotonic()
@@ -422,6 +578,27 @@ def fmp_get(path: str, params: dict[str, str]) -> Any:
         with urllib.request.urlopen(request, timeout=15) as response:
             data = json.loads(response.read().decode("utf-8"))
             _FMP_CACHE[cache_key] = (now, data)
+            return data
+    except Exception:
+        if cached:
+            return cached[1]
+        raise
+
+
+def polygon_get(path: str, params: dict[str, str]) -> Any:
+    cache_key = json.dumps(["polygon", path, sorted(params.items())], sort_keys=True)
+    now = time.monotonic()
+    cached = _POLYGON_CACHE.get(cache_key)
+    if cached and now - cached[0] <= settings.market_cache_seconds:
+        return cached[1]
+    query = {**params, "apiKey": settings.polygon_api_key}
+    base = settings.massive_base_url or settings.polygon_base_url or "https://api.massive.com"
+    url = f"{base}{path}?{urllib.parse.urlencode(query)}"
+    request = urllib.request.Request(url, headers={"User-Agent": "RiskWise-dev/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            data = json.loads(response.read().decode("utf-8"))
+            _POLYGON_CACHE[cache_key] = (now, data)
             return data
     except Exception:
         if cached:

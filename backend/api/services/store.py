@@ -277,9 +277,16 @@ class MongoStore(DemoStore):
         self.client.admin.command("ping")
         self.db.users.create_index("email", unique=True)
         self.db.users.create_index("clerkId", unique=True, sparse=True)
+        self.db.users.create_index([("id", 1), ("updatedAt", -1)])
+        self.db.users.create_index([("riskStyle", 1), ("experienceLevel", 1)])
         self.db.chat_threads.create_index([("userId", 1), ("updatedAt", -1)])
+        self.db.chat_threads.create_index("id", unique=True)
         self.db.chat_messages.create_index([("threadId", 1), ("createdAt", 1)])
+        self.db.chat_messages.create_index([("userId", 1), ("createdAt", -1)])
         self.db.saved_checks.create_index([("userId", 1), ("createdAt", -1)])
+        self.db.saved_checks.create_index([("userId", 1), ("tradeCheckId", 1)])
+        self.db.trade_checks.create_index([("userId", 1), ("createdAt", -1)])
+        self.db.trade_checks.create_index("id", unique=True)
         self.db.chat_feedback.create_index([("userId", 1), ("createdAt", -1)])
 
     def create_user(self, payload: Any) -> dict[str, Any]:
@@ -342,6 +349,8 @@ class MongoStore(DemoStore):
         if thread_ids:
             self.db.chat_messages.delete_many({"threadId": {"$in": thread_ids}})
         self.db.chat_feedback.delete_many({"userId": user_id})
+        self.db.uploads.delete_many({"userId": user_id})
+        self.db.user_context.delete_many({"userId": user_id})
         return {"deleted": True, "userId": user_id, "deletedAt": utc_now()}
 
     def clear_user_context(self, user_id: str) -> dict[str, Any]:
@@ -357,6 +366,8 @@ class MongoStore(DemoStore):
         if thread_ids:
             self.db.chat_messages.delete_many({"threadId": {"$in": thread_ids}})
         self.db.chat_feedback.delete_many({"userId": user_id})
+        self.db.uploads.delete_many({"userId": user_id})
+        self.db.user_context.delete_many({"userId": user_id})
         self.db.users.find_one_and_update(
             {"id": user_id},
             {

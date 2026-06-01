@@ -65,6 +65,16 @@ export async function getOptionsExpirations(ticker) {
   return getJson(`/market/options/expirations/${encodeURIComponent(ticker.toUpperCase())}`);
 }
 
+export async function getOptionsChain({ ticker, expiration }) {
+  if (!ticker) {
+    return null;
+  }
+  const params = new URLSearchParams();
+  if (expiration) params.set("expiration", expiration);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return getJson(`/market/options/chain/${encodeURIComponent(ticker.toUpperCase())}${suffix}`);
+}
+
 export async function getOptionContractContext({ ticker, expiration, strike, optionSide }) {
   if (!ticker) {
     return null;

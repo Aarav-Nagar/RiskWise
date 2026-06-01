@@ -272,9 +272,13 @@ def collect_missing_data(calls: list[ToolCall], message: str) -> list[str]:
     for call in calls:
         result = call.result
         status = str(result.get("status") or "")
-        if status.startswith("requires") or status.startswith("missing") or status in {"needs_provider_key", "partial_market_data"}:
+        if status.startswith("requires") or status.startswith("missing") or status in {"needs_provider_key", "partial_market_data", "options_reference_ready", "options_provider_configured"}:
             if call.name == "get_options_context":
-                missing.extend(["live option chain", "implied volatility", "Greeks", "bid/ask", "contract premium"])
+                pending = result.get("fields_pending") or []
+                if pending:
+                    missing.extend(str(item).replace("_", " ") for item in pending)
+                else:
+                    missing.extend(["live option chain", "implied volatility", "Greeks", "bid/ask", "contract premium"])
             elif call.name == "calculate_breakeven":
                 missing.extend(str(item) for item in result.get("missing", []))
             elif call.name == "get_saved_trade":

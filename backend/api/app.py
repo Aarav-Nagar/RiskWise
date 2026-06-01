@@ -133,7 +133,9 @@ def ready() -> ReadyResponse:
         llm=llm_status,
         market_data={
             "provider": settings.market_data_provider,
-            "configured": bool(settings.fmp_api_key) if settings.market_data_provider == "fmp" else settings.market_data_provider == "disabled",
+            "configured": bool(settings.fmp_api_key or settings.polygon_api_key)
+            if settings.market_data_provider in {"fmp", "polygon", "massive", "hybrid"}
+            else settings.market_data_provider == "disabled",
         },
     )
 
