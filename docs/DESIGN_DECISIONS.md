@@ -37,6 +37,26 @@ RiskWise turns those questions into steps:
 
 The point is not to make the app slower for no reason. The point is to make the user prove that the setup has enough information to review.
 
+## Why There Are Three Check Paths
+
+RiskWise supports three starting points because users do not always arrive with the same level of detail.
+
+**Stock Idea** is for the early stage. The user has a ticker and an outlook, but not a contract. RiskWise can slow the idea down and suggest what kind of structure would need to be reviewed next.
+
+**Option Contract** is for users who already know the ticker, strike, expiration, premium, and size. This path goes straight into contract math and issue detection.
+
+**Screenshot** is for the realistic case where a user is looking at a broker screen. The app should eventually extract the contract details, then ask the user to confirm them before analysis.
+
+These paths keep the app flexible without adding extra tabs.
+
+## Why The App Uses Investigation Language
+
+RiskWise should not sound like it is predicting the market.
+
+Words like "signal," "prediction," and "trade alert" can make the app feel more certain than it really is. The product uses words like "check," "investigation," "evidence," "missing context," and "needs review" because those words better match what the app can honestly do.
+
+The app can calculate risk and organize reasoning. It cannot know the future.
+
 ## Why RiskWiseAI Exists
 
 RiskWiseAI is an explainer and coach, not a signal generator.
@@ -61,6 +81,12 @@ That is why the profile stores things like:
 - max risk per trade
 
 These settings should change how RiskWiseAI responds. If a user chooses "strict about risk," the AI should lead with sizing and downside. If a user chooses "step-by-step," the AI should explain slowly and clearly.
+
+## Why The UI Uses Green And White
+
+RiskWise uses a green and white visual style because the app is supposed to feel calm, careful, and trustworthy.
+
+The goal is not to make trading feel like a game. Bright red and dark neon screens can make risk feel exciting. RiskWise should do the opposite. The interface should make the user feel like they are reviewing a decision, not chasing a scoreboard.
 
 ## Why Missing Data Is Shown Instead Of Hidden
 
