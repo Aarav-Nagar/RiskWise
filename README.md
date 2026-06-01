@@ -1,4 +1,4 @@
-# Finance App
+# RiskWise
 
 This is the main finance app workspace.
 
