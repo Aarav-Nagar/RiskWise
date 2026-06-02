@@ -811,16 +811,17 @@ function ContractDetailsStep({ draft, setNumericField, validation, contractRefer
 }
 
 function FieldRow({ label, value, onChangeText, prefix, suffix, error }) {
+  const hasValue = String(value || "").length > 0;
   return (
     <View style={styles.fieldRow}>
-      <View style={styles.flex}>
+      <View style={styles.fieldLabelWrap}>
         <Text style={styles.fieldLabel}>{label}</Text>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
       </View>
       <View style={[styles.compactInput, error && styles.inputError]}>
-        {prefix ? <Text style={styles.inputAdornment}>{prefix}</Text> : null}
+        {prefix && hasValue ? <Text style={styles.inputAdornment}>{prefix}</Text> : null}
         <TextInput value={String(value || "")} onChangeText={onChangeText} keyboardType="decimal-pad" style={styles.compactTextInput} placeholder="Optional" placeholderTextColor="#9AA5A0" />
-        {suffix ? <Text style={styles.inputAdornment}>{suffix}</Text> : null}
+        {suffix && hasValue ? <Text style={styles.inputAdornment}>{suffix}</Text> : null}
       </View>
     </View>
   );
@@ -1561,7 +1562,8 @@ const styles = StyleSheet.create({
   dayCellDisabled: { opacity: 0.25 },
   dayText: { color: palette.dark, fontSize: 10, fontWeight: "900" },
   dayTextActive: { color: "#FFFFFF" },
-  fieldRow: { minHeight: 54, flexDirection: "row", alignItems: "center", gap: 12, borderBottomWidth: 1, borderBottomColor: "#EEF2EF", paddingVertical: 8 },
+  fieldRow: { width: "100%", borderBottomWidth: 1, borderBottomColor: "#EEF2EF", paddingVertical: 6 },
+  fieldLabelWrap: { width: "100%", marginBottom: 4 },
   referenceCard: { backgroundColor: "#FBFFFC", borderColor: "#D7F0DE", padding: 12 },
   referenceTitle: { color: palette.dark, fontSize: 12, fontWeight: "900" },
   referenceSub: { color: palette.muted, fontSize: 10, lineHeight: 15, fontWeight: "800", marginTop: 3 },
@@ -1572,9 +1574,9 @@ const styles = StyleSheet.create({
   referenceChipSub: { color: palette.muted, fontSize: 8, fontWeight: "800", marginTop: 2, textAlign: "center" },
   referenceChipTextActive: { color: "#FFFFFF" },
   fieldLabel: { color: palette.muted, fontSize: 11, fontWeight: "900" },
-  compactInput: { width: 150, minHeight: 38, borderRadius: 12, borderWidth: 1, borderColor: palette.border, backgroundColor: "#FBFCFB", flexDirection: "row", alignItems: "center", paddingHorizontal: 9 },
+  compactInput: { width: "100%", minHeight: 38, borderRadius: 13, borderWidth: 1, borderColor: palette.border, backgroundColor: "#FBFCFB", flexDirection: "row", alignItems: "center", paddingHorizontal: 10 },
   inputError: { borderColor: palette.red, backgroundColor: "#FFFBFB" },
-  compactTextInput: { flex: 1, color: palette.dark, textAlign: "right", fontWeight: "900", outlineStyle: "none" },
+  compactTextInput: { flex: 1, minWidth: 0, color: palette.dark, textAlign: "left", fontWeight: "900", outlineStyle: "none" },
   inputAdornment: { color: palette.muted, fontSize: 11, fontWeight: "900" },
   errorText: { color: palette.red, fontSize: 9, fontWeight: "800", marginTop: 3 },
   helperText: { color: palette.muted, fontSize: 10, lineHeight: 15, fontWeight: "700", marginVertical: 9 },
