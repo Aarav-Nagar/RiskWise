@@ -291,7 +291,12 @@ export default function App() {
         email: pendingVerification.email,
         name: pendingVerification.form.name,
         profile: pendingVerification.form
-      });
+      }).catch(() => createLocalRiskWiseUser({
+        email: pendingVerification.email,
+        profile: pendingVerification.form,
+        clerkId: result.createdUserId || pendingVerification.email,
+        fallbackName: pendingVerification.form.name
+      }));
       setPendingVerification(null);
       enterApp(appUser);
     } catch (err) {
@@ -491,13 +496,44 @@ async function restoreRiskWiseUserFromEmail(email, profile = {}, clerkId = email
   try {
     return await lookupProfileByEmail(email);
   } catch (err) {
-    return syncClerkProfile({
-      clerkId,
-      email,
-      name: profile.name || fallbackName,
-      profile
-    });
+    try {
+      return await syncClerkProfile({
+        clerkId,
+        email,
+        name: profile.name || fallbackName,
+        profile
+      });
+    } catch (syncErr) {
+      return createLocalRiskWiseUser({ email, profile, clerkId, fallbackName });
+    }
   }
+}
+
+function createLocalRiskWiseUser({ email, profile = {}, clerkId, fallbackName = "RiskWise User" }) {
+  return {
+    id: `local-${clerkId || email}`,
+    clerkId: clerkId || email,
+    name: profile.name || fallbackName,
+    email,
+    accountSize: Number(profile.accountSize || 25000),
+    riskBudgetPercent: Number(profile.riskBudgetPercent || 2),
+    purpose: profile.purpose || [],
+    tradeFocus: profile.tradeFocus || [],
+    experienceLevel: profile.experienceLevel || "Some experience",
+    riskStyle: profile.riskStyle || "Balanced",
+    struggles: profile.struggles || [],
+    reminders: profile.reminders || [],
+    sectors: profile.sectors || [],
+    marketCaps: profile.marketCaps || [],
+    events: profile.events || [],
+    safetyAccepted: Boolean(profile.safetyAccepted),
+    aiMemory: profile.aiMemory || {},
+    riskRules: profile.riskRules || {},
+    coachStyle: profile.coachStyle || {},
+    savedContext: profile.savedContext || {},
+    appPreferences: profile.appPreferences || {},
+    syncMode: "local"
+  };
 }
 
   if (!ready) {
@@ -577,6 +613,10 @@ function firstName(name) {
 
 function formatClerkError(err) {
   const clerkMessage = err?.errors?.[0]?.longMessage || err?.errors?.[0]?.message;
+  const message = `${clerkMessage || err?.message || ""}`.toLowerCase();
+  if (message.includes("failed to fetch") || message.includes("network request failed")) {
+    return "RiskWise account sync is offline. Start the backend, or use preview mode while designing locally.";
+  }
   return clerkMessage || err?.message || "Account service is unavailable.";
 }
 

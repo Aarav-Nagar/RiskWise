@@ -31,7 +31,7 @@ export async function syncClerkProfile({ clerkId, email, name, profile = {} }) {
 }
 
 export async function lookupProfileByEmail(email) {
-  const response = await fetch(`${API_BASE_URL}/auth/profile-by-email?email=${encodeURIComponent(email)}`);
+  const response = await safeFetch(`${API_BASE_URL}/auth/profile-by-email?email=${encodeURIComponent(email)}`);
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(formatApiError(data, response, "Could not load your profile."));
@@ -44,7 +44,7 @@ export async function requestPasswordReset({ email }) {
 }
 
 export async function updateProfileSettings(userId, updates) {
-  const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/profile`, {
+  const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/profile`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", "X-RiskWise-User-ID": userId },
     body: JSON.stringify(updates)
@@ -57,7 +57,7 @@ export async function updateProfileSettings(userId, updates) {
 }
 
 export async function clearRiskWiseContext(userId) {
-  const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context`, {
+  const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context`, {
     method: "DELETE",
     headers: { "X-RiskWise-User-ID": userId }
   });
@@ -69,7 +69,7 @@ export async function clearRiskWiseContext(userId) {
 }
 
 export async function getRiskWiseContextSummary(userId) {
-  const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context-summary`, {
+  const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context-summary`, {
     headers: { "X-RiskWise-User-ID": userId }
   });
   const data = await response.json().catch(() => ({}));
@@ -80,7 +80,7 @@ export async function getRiskWiseContextSummary(userId) {
 }
 
 export async function deleteRiskWiseAccount(userId) {
-  const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}`, {
+  const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}`, {
     method: "DELETE",
     headers: { "X-RiskWise-User-ID": userId }
   });
@@ -96,7 +96,7 @@ export async function signOut() {
 }
 
 async function postJson(path, body) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await safeFetch(`${API_BASE_URL}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body)
@@ -106,6 +106,14 @@ async function postJson(path, body) {
     throw new Error(formatApiError(data, response, "The account service is unavailable."));
   }
   return data;
+}
+
+async function safeFetch(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    throw new Error("RiskWise account sync is offline. Start the backend API, or keep using preview mode while working locally.");
+  }
 }
 
 function formatApiError(data, response, fallback) {

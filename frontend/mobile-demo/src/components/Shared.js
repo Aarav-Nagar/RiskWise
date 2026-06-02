@@ -133,11 +133,11 @@ const webSelectStyle = {
   outline: "none"
 };
 
-export function PrimaryButton({ label, onPress, style, disabled }) {
+export function PrimaryButton({ label, onPress, style, disabled, showArrow = true }) {
   return (
     <Pressable style={[styles.primaryButton, disabled && styles.disabled, style]} onPress={disabled ? undefined : onPress}>
       <Text style={styles.primaryButtonText}>{label}</Text>
-      <Text style={styles.primaryButtonArrow}>-&gt;</Text>
+      {showArrow ? <Text style={styles.primaryButtonArrow}>-&gt;</Text> : null}
     </Pressable>
   );
 }

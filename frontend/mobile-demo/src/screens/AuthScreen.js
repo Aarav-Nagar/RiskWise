@@ -156,17 +156,18 @@ export function AuthScreen({
   return (
     <ScrollView style={styles.authWrap} contentContainerStyle={styles.authContent} showsVerticalScrollIndicator={false}>
       <View style={styles.hero}>
-        <View style={styles.brandPill}>
-          <Ionicons name="shield-checkmark-outline" size={16} color={palette.green} />
+        <View style={styles.brandMark}>
+          <View style={styles.brandIcon}>
+            <Ionicons name="shield-checkmark-outline" size={18} color={palette.green} />
+          </View>
           <Text style={styles.brand}>RiskWise</Text>
         </View>
         <Text style={styles.title}>{title}</Text>
         <Text style={styles.subtitle}>{subtitle}</Text>
-        {mode === "home" ? <HeroPreview /> : null}
       </View>
 
       {verificationContext ? (
-        <Card>
+        <Card style={styles.authCard}>
           <Text style={sharedText.sectionTitle}>{isSignInVerification ? "Sign-in verification" : "Email verification"}</Text>
           <Text style={sharedText.bodyText}>
             Enter the one-time code from your inbox. After verification, your RiskWise profile and preferences will sync securely.
@@ -182,6 +183,7 @@ export function AuthScreen({
                 : onVerifyEmail(verificationCode.trim())
             }
             disabled={loading || verificationCode.trim().length < 4}
+            showArrow={false}
           />
           <SecondaryButton
             label="Back to Sign In"
@@ -197,7 +199,7 @@ export function AuthScreen({
           />
         </Card>
       ) : pendingPasswordReset ? (
-        <Card>
+        <Card style={styles.authCard}>
           <Text style={sharedText.sectionTitle}>Password reset</Text>
           <Text style={sharedText.bodyText}>
             Enter the reset code and choose a new password. You will be signed in after a successful reset.
@@ -217,6 +219,7 @@ export function AuthScreen({
             label={loading ? "Resetting..." : "Reset Password"}
             onPress={() => onCompletePasswordReset({ code: resetCode.trim(), password: newPassword })}
             disabled={loading || resetCode.trim().length < 4 || newPassword.length < 8}
+            showArrow={false}
           />
           <SecondaryButton
             label="Back to Sign In"
@@ -231,11 +234,13 @@ export function AuthScreen({
       ) : mode === "home" ? (
         <>
           <TrustPanel />
-          <PrimaryButton label="Create Account" onPress={() => setMode("signup")} />
-          <SecondaryButton label="Sign In" onPress={() => setMode("signin")} />
+          <Card style={styles.entryCard}>
+            <PrimaryButton label="Create account" onPress={() => setMode("signup")} showArrow={false} />
+            <SecondaryButton label="I already have an account" onPress={() => setMode("signin")} />
+          </Card>
         </>
       ) : mode === "signin" ? (
-        <Card>
+        <Card style={styles.authCard}>
           <Field
             label="Email"
             value={form.email}
@@ -253,14 +258,14 @@ export function AuthScreen({
             placeholder="Your password"
           />
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <PrimaryButton label={loading ? "Signing In..." : "Sign In"} onPress={submitSignIn} disabled={!canSignIn} />
+          <PrimaryButton label={loading ? "Signing in..." : "Sign in"} onPress={submitSignIn} disabled={!canSignIn} showArrow={false} />
           <Pressable style={styles.textButton} onPress={() => setMode("forgot")}>
             <Text style={styles.textButtonText}>Forgot password?</Text>
           </Pressable>
           <SecondaryButton label="Back" onPress={() => setMode("home")} />
         </Card>
       ) : mode === "forgot" ? (
-        <Card>
+        <Card style={styles.authCard}>
           <Field
             label="Email"
             value={form.email}
@@ -277,11 +282,11 @@ export function AuthScreen({
               <Text style={styles.successText}>{resetMessage}</Text>
             </View>
           ) : null}
-          <PrimaryButton label={loading ? "Sending..." : "Send Reset Code"} onPress={submitPasswordReset} disabled={loading || !validEmail} />
+          <PrimaryButton label={loading ? "Sending..." : "Send reset code"} onPress={submitPasswordReset} disabled={loading || !validEmail} showArrow={false} />
           <SecondaryButton label="Back to Sign In" onPress={() => setMode("signin")} />
         </Card>
       ) : (
-        <Card>
+        <Card style={styles.authCard}>
           <StepHeader step={step} />
           {step === 0 ? <AccountStep form={form} setForm={setForm} errors={accountErrors} /> : null}
           {step === 1 ? <PurposeStep form={form} setForm={setForm} /> : null}
@@ -293,17 +298,16 @@ export function AuthScreen({
             label={loading ? "Working..." : step === steps.length - 1 ? "Start App" : "Continue"}
             onPress={nextStep}
             disabled={!canContinueSignup}
+            showArrow={false}
           />
           <SecondaryButton label={step === 0 ? "Back" : "Previous"} onPress={() => (step === 0 ? setMode("home") : setStep(step - 1))} />
         </Card>
       )}
 
-      <Card style={styles.disclaimer}>
-        <Text style={sharedText.mediumTitle}>Account note</Text>
-        <Text style={sharedText.bodyText}>
-          Your profile, risk checks, and coach history sync securely when you sign in.
-        </Text>
-      </Card>
+      <View style={styles.footerNote}>
+        <Ionicons name="lock-closed-outline" size={14} color={palette.muted} />
+        <Text style={styles.footerNoteText}>Saved checks, profile memory, and coach history stay tied to your account.</Text>
+      </View>
     </ScrollView>
   );
 }
@@ -355,8 +359,8 @@ function TrustPanel() {
     <Card style={styles.valueCard}>
       <View style={styles.valueTop}>
         <View>
-          <Text style={styles.valueKicker}>Built for risky moments</Text>
-          <Text style={sharedText.sectionTitle}>Slow down before the trade.</Text>
+          <Text style={styles.valueKicker}>Personal risk workspace</Text>
+          <Text style={sharedText.sectionTitle}>Keep your checks and coach context in one place.</Text>
         </View>
         <View style={styles.secureBadge}>
           <Ionicons name="lock-closed-outline" size={15} color={palette.green} />
@@ -364,15 +368,15 @@ function TrustPanel() {
         </View>
       </View>
       <Text style={sharedText.bodyText}>
-        Run an options idea through risk math and scenario checks before you commit real capital.
+        Sign in to save trade checks, remember your risk rules, and keep RiskWiseAI aligned with how you want explanations.
       </Text>
       <View style={styles.heroStats}>
-        <MiniStat icon="analytics-outline" label="Risk math" value="Budget" />
-        <MiniStat icon="people-outline" label="Review panel" value="3 views" />
-        <MiniStat icon="chatbubble-ellipses-outline" label="Coach" value="Explain" />
+        <MiniStat icon="document-text-outline" label="Checks" value="Saved" />
+        <MiniStat icon="person-outline" label="Profile" value="Memory" />
+        <MiniStat icon="chatbubble-ellipses-outline" label="Coach" value="Context" />
       </View>
       <View style={styles.trustStrip}>
-        <Text style={styles.trustText}>No brokerage connection</Text>
+        <Text style={styles.trustText}>No trade execution</Text>
         <Text style={styles.trustDot}>|</Text>
         <Text style={styles.trustText}>Education only</Text>
       </View>
@@ -530,51 +534,74 @@ function SingleSelect({ options, value, onChange }) {
 const styles = StyleSheet.create({
   authWrap: {
     flex: 1,
-    paddingHorizontal: 18
+    paddingHorizontal: 20
   },
   authContent: {
     justifyContent: "center",
     minHeight: "100%",
-    paddingVertical: 18,
+    paddingTop: 26,
+    paddingBottom: 22,
     width: "100%"
   },
   hero: {
     marginBottom: 18,
-    alignItems: "center",
+    alignItems: "flex-start",
     width: "100%"
   },
-  brandPill: {
+  brandMark: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 7,
+    gap: 9,
+    marginBottom: 18
+  },
+  brandIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: "#F0FBF3",
     borderWidth: 1,
     borderColor: "#CFEFD8",
-    backgroundColor: "#F3FFF6",
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 999,
-    marginBottom: 12
+    alignItems: "center",
+    justifyContent: "center"
   },
   brand: {
-    color: palette.green,
+    color: palette.dark,
+    fontSize: 18,
     fontWeight: "900",
-    textAlign: "center"
+    textAlign: "left"
   },
   title: {
     color: palette.dark,
-    fontSize: 31,
+    fontSize: 30,
     fontWeight: "900",
-    textAlign: "center"
+    textAlign: "left",
+    letterSpacing: 0
   },
   subtitle: {
     color: palette.muted,
-    textAlign: "center",
+    textAlign: "left",
     lineHeight: 20,
-    marginTop: 8
+    marginTop: 8,
+    maxWidth: 340
+  },
+  authCard: {
+    borderRadius: 22,
+    padding: 18,
+    marginTop: 0,
+    shadowOpacity: 0.05,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 }
+  },
+  entryCard: {
+    padding: 14,
+    gap: 10,
+    borderRadius: 22
   },
   valueCard: {
-    backgroundColor: "#FBFFFC",
-    borderColor: "#D8F2DE"
+    backgroundColor: "#FFFFFF",
+    borderColor: "#E4ECE5",
+    borderRadius: 22,
+    padding: 16
   },
   valueTop: {
     flexDirection: "row",
@@ -782,16 +809,26 @@ const styles = StyleSheet.create({
   docketWarn: {
     color: palette.amber
   },
-  disclaimer: {
-    marginTop: 12,
-    backgroundColor: "#F6FFF8",
-    borderColor: "#CFEFD8"
+  footerNote: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginTop: 16,
+    paddingHorizontal: 4
+  },
+  footerNoteText: {
+    flex: 1,
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "700"
   },
   error: {
     color: palette.red,
     fontSize: 12,
     fontWeight: "800",
-    marginBottom: 10
+    marginBottom: 10,
+    lineHeight: 16
   },
   textButton: {
     alignItems: "center",

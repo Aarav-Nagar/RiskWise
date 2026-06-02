@@ -12,7 +12,7 @@ export function AppShell({ activeTab, setActiveTab, disabledTabs, showTabs = tru
       <StatusBar barStyle="dark-content" />
       <ExpoStatusBar style="dark" />
       <View style={styles.phone}>
-        <AmbientGlow />
+        {showTabs ? <AmbientGlow /> : null}
         <PhoneStatusBar />
         <View style={styles.screen}>{children}</View>
         {showTabs ? <BottomTabs activeTab={activeTab} setActiveTab={setActiveTab} disabledTabs={disabledTabs} /> : null}
