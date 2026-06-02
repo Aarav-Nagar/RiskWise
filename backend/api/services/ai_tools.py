@@ -7,7 +7,10 @@ from typing import Any
 from api.services.market_data import (
     company_profile,
     earnings_calendar,
+    market_search,
     market_quote,
+    options_chain,
+    options_contract_context,
     options_context,
     stock_news,
 )
@@ -40,6 +43,7 @@ async def build_ai_tool_context(
     """
 
     ticker = infer_ticker(message, current_report, recent_checks)
+    contract_query = infer_contract_query(message, current_report, recent_checks)
     calls: list[ToolCall] = []
 
     if asks_for_saved_trade(message, mode):
@@ -72,9 +76,43 @@ async def build_ai_tool_context(
         news = await stock_news(ticker)
         calls.append(ToolCall("get_news", {"ticker": ticker}, news.model_dump()))
 
-    if ticker and asks_for_options_data(message):
+    if ticker and (current_report or mode in {"trade_review", "trade_identity", "saved_trade_lookup"} or asks_for_options_data(message)):
         options = await options_context(ticker)
         calls.append(ToolCall("get_options_context", {"ticker": ticker}, options.model_dump()))
+        if asks_for_option_chain(message, mode, current_report):
+            chain = await options_chain(ticker, contract_query.get("expiration"))
+            calls.append(
+                ToolCall(
+                    "get_option_chain",
+                    {"ticker": ticker, "expiration": contract_query.get("expiration")},
+                    chain.model_dump(),
+                )
+            )
+        if asks_for_contract_context(message, mode, current_report, contract_query):
+            contract = await options_contract_context(
+                ticker,
+                expiration=contract_query.get("expiration"),
+                strike=contract_query.get("strike"),
+                option_side=contract_query.get("option_side"),
+            )
+            calls.append(
+                ToolCall(
+                    "get_option_contract",
+                    {
+                        "ticker": ticker,
+                        "expiration": contract_query.get("expiration"),
+                        "strike": contract_query.get("strike"),
+                        "option_side": contract_query.get("option_side"),
+                    },
+                    contract.model_dump(),
+                )
+            )
+
+    if not ticker and asks_for_symbol_lookup(message):
+        query = symbol_lookup_query(message)
+        if query:
+            search = await market_search(query)
+            calls.append(ToolCall("search_ticker", {"query": query}, search.model_dump()))
 
     missing_data = collect_missing_data(calls, message)
     risk_flags = collect_risk_flags(calls, message, current_report)
@@ -124,6 +162,36 @@ def infer_ticker(
         if isinstance(report, dict) and report.get("ticker"):
             return str(report["ticker"]).upper()[:8]
     return None
+
+
+def infer_contract_query(
+    message: str,
+    current_report: dict[str, Any] | None,
+    recent_checks: list[dict[str, Any]],
+) -> dict[str, Any]:
+    source: dict[str, Any] = {}
+    if current_report:
+        source = current_report
+    elif recent_checks:
+        latest = recent_checks[0]
+        maybe_report = latest.get("report") if isinstance(latest, dict) else None
+        if isinstance(maybe_report, dict):
+            source = maybe_report
+
+    trade_type = str(
+        source.get("tradeType")
+        or source.get("trade_type")
+        or source.get("optionSide")
+        or source.get("option_side")
+        or message
+    ).lower()
+    option_side = "put" if "put" in trade_type and "call" not in trade_type else "call"
+    return {
+        "expiration": source.get("expiration") or source.get("expiration_date") or parse_iso_date(message),
+        "strike": number_from_value(source.get("strike")) or parse_labeled_number(message, ["strike", "strk"]),
+        "premium": number_from_value(source.get("premium") or source.get("debit")) or parse_labeled_number(message, ["premium", "debit", "paid", "cost"]),
+        "option_side": option_side,
+    }
 
 
 def asks_for_saved_trade(message: str, mode: str) -> bool:
@@ -181,6 +249,48 @@ def asks_for_options_data(message: str) -> bool:
             "contract",
         ]
     )
+
+
+def asks_for_option_chain(message: str, mode: str, current_report: dict[str, Any] | None) -> bool:
+    lower = message.lower()
+    return bool(current_report) or mode in {"trade_review", "trade_identity", "saved_trade_lookup"} or any(
+        term in lower
+        for term in [
+            "option chain",
+            "chain",
+            "expiration",
+            "expirations",
+            "contracts",
+            "strikes",
+            "available",
+            "contract",
+        ]
+    )
+
+
+def asks_for_contract_context(
+    message: str,
+    mode: str,
+    current_report: dict[str, Any] | None,
+    contract_query: dict[str, Any],
+) -> bool:
+    lower = message.lower()
+    return bool(current_report) or mode in {"trade_review", "trade_identity", "saved_trade_lookup"} or bool(
+        contract_query.get("strike") or contract_query.get("expiration")
+    ) or any(term in lower for term in ["my contract", "this contract", "breakeven", "premium", "strike", "call", "put"])
+
+
+def asks_for_symbol_lookup(message: str) -> bool:
+    lower = message.lower()
+    return any(term in lower for term in ["find ticker", "what ticker", "symbol for", "company ticker", "search"])
+
+
+def symbol_lookup_query(message: str) -> str:
+    lower = message.lower()
+    for marker in ["symbol for", "ticker for", "find ticker", "search"]:
+        if marker in lower:
+            return message[lower.index(marker) + len(marker) :].strip(" :?.")[:40]
+    return message.strip()[:40]
 
 
 def get_saved_trade(recent_checks: list[dict[str, Any]]) -> dict[str, Any]:
@@ -273,10 +383,18 @@ def collect_missing_data(calls: list[ToolCall], message: str) -> list[str]:
         result = call.result
         status = str(result.get("status") or "")
         if status.startswith("requires") or status.startswith("missing") or status in {"needs_provider_key", "partial_market_data", "options_reference_ready", "options_provider_configured"}:
-            if call.name == "get_options_context":
+            if call.name in {"get_options_context", "get_option_chain", "get_option_contract"}:
                 pending = result.get("fields_pending") or []
                 if pending:
                     missing.extend(str(item).replace("_", " ") for item in pending)
+                elif call.name in {"get_option_chain", "get_option_contract"} and result.get("status") in {
+                    "requires_options_provider",
+                    "reference_chain_ready",
+                    "reference_chain_empty",
+                    "reference_contract_matched",
+                    "partial_contract_context",
+                }:
+                    missing.extend(["live premium", "bid/ask", "implied volatility", "Greeks", "volume/open interest"])
                 else:
                     missing.extend(["live option chain", "implied volatility", "Greeks", "bid/ask", "contract premium"])
             elif call.name == "calculate_breakeven":
@@ -286,6 +404,11 @@ def collect_missing_data(calls: list[ToolCall], message: str) -> list[str]:
     if asks_for_options_data(message) and not any(call.name == "get_options_context" for call in calls):
         missing.append("ticker")
     return sorted(set(item for item in missing if item))
+
+
+def parse_iso_date(text: str) -> str | None:
+    match = re.search(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
+    return match.group(1) if match else None
 
 
 def collect_risk_flags(calls: list[ToolCall], message: str, current_report: dict[str, Any] | None) -> list[str]:

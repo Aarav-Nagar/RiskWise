@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
 import { listChatMessages, listChatThreads, sendChatMessage } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -137,16 +139,10 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     setAttachmentMenuOpen((open) => !open);
   }
 
-  function selectUploadSource(source) {
+  async function selectUploadSource(source) {
     setAttachmentMenuOpen(false);
     if (Platform.OS !== "web" || typeof document === "undefined") {
-      setMessages((items) => [
-        ...items,
-        {
-          role: "assistant",
-          content: "Attachment upload is active in the browser preview. Native camera and library pickers come when we package the iOS build."
-        }
-      ]);
+      await pickNativeAttachment(source);
       return;
     }
     const inputEl = document.createElement("input");
@@ -168,6 +164,54 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
       setUploadStatus(parsed.length ? `${parsed.length} ${parsed.length === 1 ? "item" : "items"} added from ${uploadSourceLabel(source)}. Ask RiskWiseAI to review them.` : "");
     };
     inputEl.click();
+  }
+
+  async function pickNativeAttachment(source) {
+    try {
+      setUploadStatus(`Opening ${uploadSourceLabel(source)}...`);
+      if (source === "camera" || source === "library") {
+        const permission =
+          source === "camera"
+            ? await ImagePicker.requestCameraPermissionsAsync()
+            : await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (permission.status !== "granted") {
+          setUploadStatus(`${uploadSourceLabel(source)} permission was not granted.`);
+          return;
+        }
+        const result =
+          source === "camera"
+            ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.75, base64: true })
+            : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.75, base64: true, allowsMultipleSelection: true, selectionLimit: 4 });
+        if (result.canceled) {
+          setUploadStatus("");
+          return;
+        }
+        const parsed = (result.assets || []).slice(0, 4).map((asset, index) => nativeImageAttachment(asset, source, index));
+        setAttachments((items) => [...items, ...parsed].slice(0, 4));
+        setUploadStatus(parsed.length ? `${parsed.length} ${parsed.length === 1 ? "image" : "images"} added from ${uploadSourceLabel(source)}.` : "");
+        return;
+      }
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: true,
+        type: ["image/*", "text/*", "application/pdf", "text/csv"]
+      });
+      if (result.canceled) {
+        setUploadStatus("");
+        return;
+      }
+      const parsed = (result.assets || []).slice(0, 4).map((asset) => ({
+        name: asset.name || "uploaded-file",
+        type: asset.mimeType || "application/octet-stream",
+        size: asset.size || 0,
+        source: "files",
+        uri: asset.uri
+      }));
+      setAttachments((items) => [...items, ...parsed].slice(0, 4));
+      setUploadStatus(parsed.length ? `${parsed.length} ${parsed.length === 1 ? "file" : "files"} added from Files.` : "");
+    } catch (err) {
+      setUploadStatus("Could not attach that file. Try a smaller image or file.");
+    }
   }
 
   return (
@@ -492,6 +536,22 @@ function uploadSourceLabel(source) {
   if (source === "camera") return "Camera";
   if (source === "library") return "Photo Library";
   return "Files";
+}
+
+function nativeImageAttachment(asset, source, index) {
+  const type = asset.mimeType || "image/jpeg";
+  const extension = type.includes("png") ? "png" : "jpg";
+  const base = {
+    name: asset.fileName || `${source}-image-${index + 1}.${extension}`,
+    type,
+    size: asset.fileSize || 0,
+    source,
+    uri: asset.uri
+  };
+  if (asset.base64) {
+    return { ...base, dataUrl: `data:${type};base64,${asset.base64}` };
+  }
+  return base;
 }
 
 function initialGreeting(user) {

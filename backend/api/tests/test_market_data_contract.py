@@ -36,6 +36,19 @@ def test_market_search_finds_niche_symbols_from_local_index() -> None:
         assert expected in symbols
 
 
+def test_market_search_ranks_exact_symbol_before_company_name_noise() -> None:
+    ranked = market_data.rank_search_items(
+        "ACHR",
+        [
+            {"symbol": "XYZ", "name": "Achr Holdings Example", "exchange": "NASDAQ"},
+            {"symbol": "ACHR", "name": "Archer Aviation Inc.", "exchange": "NYSE"},
+            {"symbol": "ARCH", "name": "Arch Resources", "exchange": "NYSE"},
+        ],
+    )
+
+    assert ranked[0]["symbol"] == "ACHR"
+
+
 def test_options_context_is_honest_about_missing_contract_feed() -> None:
     response = client.get("/market/options-context/AAPL")
 

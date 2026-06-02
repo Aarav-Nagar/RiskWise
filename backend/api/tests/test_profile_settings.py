@@ -150,6 +150,14 @@ def test_clear_context_keeps_profile_but_removes_analysis_memory():
     )
     assert chat.status_code == 200
 
+    summary = client.get(
+        f"/auth/users/{user['id']}/context-summary",
+        headers={"X-RiskWise-User-ID": user["id"]},
+    )
+    assert summary.status_code == 200
+    assert summary.json()["savedChecks"] >= 1
+    assert summary.json()["chatThreads"] >= 1
+
     clear = client.delete(f"/auth/users/{user['id']}/context")
     assert clear.status_code == 200
     assert clear.json()["cleared"] is True
@@ -168,6 +176,14 @@ def test_clear_context_keeps_profile_but_removes_analysis_memory():
     saved_after = client.get(f"/saved-checks/{user['id']}")
     assert saved_after.status_code == 200
     assert saved_after.json() == []
+
+    summary_after = client.get(
+        f"/auth/users/{user['id']}/context-summary",
+        headers={"X-RiskWise-User-ID": user["id"]},
+    )
+    assert summary_after.status_code == 200
+    assert summary_after.json()["savedChecks"] == 0
+    assert summary_after.json()["chatThreads"] == 0
 
 
 def test_delete_user_removes_profile_and_saved_context():

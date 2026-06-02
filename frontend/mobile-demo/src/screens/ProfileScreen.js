@@ -3,6 +3,7 @@ import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-nativ
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
 import { ScreenScroll } from "../components/Shared";
+import { getRiskWiseContextSummary } from "../services/authService";
 import { palette } from "../theme/theme";
 
 const PANELS = ["Overview", "Rules & AI", "Account"];
@@ -43,6 +44,36 @@ export function ProfileScreen({ user, onSignOut, onUpdateUser, onClearContext, o
 
   React.useEffect(() => {
     setProfile(profileFromUser(user));
+  }, [user?.id]);
+
+  React.useEffect(() => {
+    let active = true;
+    async function loadContextSummary() {
+      if (!user?.id || String(user.id).startsWith("preview")) {
+        return;
+      }
+      try {
+        const summary = await getRiskWiseContextSummary(user.id);
+        if (!active) {
+          return;
+        }
+        setProfile((current) => ({
+          ...current,
+          analysisSources: {
+            savedChecks: { ...current.analysisSources.savedChecks, count: summary.savedChecks || 0 },
+            chatHistory: { ...current.analysisSources.chatHistory, count: summary.chatThreads || 0 },
+            uploadedScreenshots: { ...current.analysisSources.uploadedScreenshots, count: summary.uploadedScreenshots || 0 },
+            watchlist: { ...current.analysisSources.watchlist, count: summary.watchlist || 0 }
+          }
+        }));
+      } catch (error) {
+        // Counts are helpful but should never block profile editing.
+      }
+    }
+    loadContextSummary();
+    return () => {
+      active = false;
+    };
   }, [user?.id]);
 
   const firstName = firstNameOf(profile.name);
@@ -301,7 +332,13 @@ function PanelTabs({ active, onChange }) {
   return (
     <View style={styles.panelTabs}>
       {PANELS.map((item) => (
-        <Pressable key={item} style={[styles.panelTab, active === item && styles.panelTabActive]} onPress={() => onChange(item)}>
+        <Pressable
+          key={item}
+          accessibilityRole="button"
+          accessibilityLabel={`Profile section ${item}`}
+          style={[styles.panelTab, active === item && styles.panelTabActive]}
+          onPress={() => onChange(item)}
+        >
           <Text style={[styles.panelTabText, active === item && styles.panelTabTextActive]}>{item}</Text>
         </Pressable>
       ))}
@@ -633,10 +670,10 @@ function profileFromUser(user) {
     coachStyle,
     savedContext,
     analysisSources: {
-      savedChecks: { enabled: savedContext.savedChecks, count: savedContext.savedChecks ? 46 : 0 },
-      chatHistory: { enabled: savedContext.chatHistory, count: savedContext.chatHistory ? 128 : 0 },
-      uploadedScreenshots: { enabled: savedContext.uploadedScreenshots, count: savedContext.uploadedScreenshots ? 12 : 0 },
-      watchlist: { enabled: savedContext.watchlist, count: savedContext.watchlist ? 24 : 0 }
+      savedChecks: { enabled: savedContext.savedChecks, count: Number(user?.contextSummary?.savedChecks || 0) },
+      chatHistory: { enabled: savedContext.chatHistory, count: Number(user?.contextSummary?.chatThreads || 0) },
+      uploadedScreenshots: { enabled: savedContext.uploadedScreenshots, count: Number(user?.contextSummary?.uploadedScreenshots || 0) },
+      watchlist: { enabled: savedContext.watchlist, count: Number(user?.contextSummary?.watchlist || 0) }
     }
   };
 }

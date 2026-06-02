@@ -368,6 +368,25 @@ def test_tool_context_creates_visible_context_block() -> None:
     assert "missing live data" in blocks
 
 
+def test_selected_trade_runs_contract_context_tools() -> None:
+    report = {
+        "ticker": "AAPL",
+        "tradeType": "Call Option (Long)",
+        "strike": 200,
+        "expiration": "2026-06-21",
+        "amountAtRisk": 215,
+        "riskMath": {"max_loss": 215},
+    }
+    response = asyncio.run(answer_chat("Review this contract", current_report=report, chat_mode="Review"))
+    used = {tool["name"] for tool in response["tools_used"]}
+    blocks = str(response["visual_blocks"]).lower()
+
+    assert "get_option_chain" in used
+    assert "get_option_contract" in used
+    assert "selected contract context" in blocks
+    assert "missing live data" in blocks
+
+
 def test_trade_review_uses_attached_report() -> None:
     report = {
         "risk_posture": "Elevated",

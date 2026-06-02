@@ -200,6 +200,12 @@ def clear_user_context(user_id: str) -> dict[str, str | bool]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/auth/users/{user_id}/context-summary")
+def user_context_summary(user_id: str) -> dict[str, int]:
+    require_request_user(user_id)
+    return store.context_summary(user_id)
+
+
 @app.post("/auth/forgot-password", response_model=ForgotPasswordResponse)
 def forgot_password(request: ForgotPasswordRequest) -> ForgotPasswordResponse:
     email = clean_email(request.email)

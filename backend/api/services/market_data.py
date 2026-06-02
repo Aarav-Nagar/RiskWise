@@ -192,13 +192,15 @@ async def market_search(query: str) -> MarketSearchResponse:
     if len(clean) < 1:
         return MarketSearchResponse(query=clean, status="empty", provider=settings.market_data_provider or "disabled", items=[])
     fallback_items = local_symbol_search(clean)
+    polygon_items = polygon_ticker_search(clean) if polygon_enabled() else []
     if not fmp_enabled():
+        items = rank_search_items(clean, [*fallback_items, *polygon_items])
         return MarketSearchResponse(
             query=clean,
-            status="local_fallback" if fallback_items else "needs_provider_key",
-            provider="local_symbol_index",
-            items=fallback_items,
-            message="FMP is not available, so search is using the built-in symbol index.",
+            status="ok" if items else "needs_provider_key",
+            provider="massive_polygon_reference+local_symbol_index" if polygon_items else "local_symbol_index",
+            items=items,
+            message="FMP is not available, so search is using Massive/Polygon ticker reference plus the built-in symbol index.",
         )
     try:
         rows = []
@@ -214,34 +216,16 @@ async def market_search(query: str) -> MarketSearchResponse:
                     next_rows = []
                 if isinstance(next_rows, list):
                     rows.extend(next_rows)
-        items = []
-        seen_symbols = set()
-        for row in [*fallback_items, *rows]:
-            if not isinstance(row, dict):
-                continue
-            symbol = str(row.get("symbol") or "").strip().upper()
-            name = clean_text(str(row.get("name") or ""))
-            if symbol and name and symbol not in seen_symbols:
-                seen_symbols.add(symbol)
-                items.append(
-                    {
-                        "symbol": symbol,
-                        "name": name,
-                        "exchange": str(row.get("exchange") or row.get("exchangeFullName") or ""),
-                        "sector": str(row.get("sector") or "Market"),
-                    }
-                )
-            if len(items) >= 8:
-                break
+        items = rank_search_items(clean, [*fallback_items, *polygon_items, *rows])
         if not items and looks_like_symbol(clean):
             symbol = clean_symbol(clean)
             items.append({"symbol": symbol, "name": f"{symbol} typed ticker", "exchange": "Verify quote", "sector": "Unverified"})
         return MarketSearchResponse(
             query=clean,
             status="ok" if items else "empty",
-            provider="financialmodelingprep+local_symbol_index",
+            provider="financialmodelingprep+massive_polygon_reference+local_symbol_index" if polygon_items else "financialmodelingprep+local_symbol_index",
             items=items,
-            message="" if rows else "FMP search returned no rows or was rate-limited, so RiskWise included local symbol matches.",
+            message="" if rows or polygon_items else "Provider search returned no rows or was rate-limited, so RiskWise included local symbol matches.",
         )
     except Exception as exc:
         return MarketSearchResponse(
@@ -504,6 +488,40 @@ def polygon_option_reference(
     return expirations, contracts
 
 
+def polygon_ticker_search(query: str) -> list[dict[str, str]]:
+    clean = query.strip()
+    if not clean:
+        return []
+    params = {
+        "market": "stocks",
+        "active": "true",
+        "limit": "20",
+        "search": clean,
+    }
+    try:
+        data = polygon_get("/v3/reference/tickers", params)
+    except Exception:
+        return []
+    rows = data.get("results") if isinstance(data, dict) else []
+    items: list[dict[str, str]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("ticker") or "").strip().upper()
+        name = clean_text(str(row.get("name") or ""))
+        if not symbol or not name:
+            continue
+        items.append(
+            {
+                "symbol": symbol,
+                "name": name,
+                "exchange": str(row.get("primary_exchange") or row.get("locale") or ""),
+                "sector": "Market",
+            }
+        )
+    return items
+
+
 def normalize_polygon_contract(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "contract_symbol": str(row.get("ticker") or ""),
@@ -681,6 +699,53 @@ def local_symbol_search(query: str) -> list[dict[str, str]]:
             ranked.append((score, item))
     ranked.sort(key=lambda row: (-row[0], row[1]["symbol"]))
     return [dict(item) for _, item in ranked[:8]]
+
+
+def rank_search_items(query: str, rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    clean = " ".join(str(query or "").replace("-", " ").replace(".", " ").split()).lower()
+    raw_symbol = str(query or "").strip().upper()
+    seen_symbols: set[str] = set()
+    ranked: list[tuple[int, dict[str, str]]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        symbol = str(row.get("symbol") or row.get("ticker") or "").strip().upper()
+        name = clean_text(str(row.get("name") or row.get("companyName") or ""))
+        if not symbol or not name or symbol in seen_symbols:
+            continue
+        seen_symbols.add(symbol)
+        searchable_symbol = symbol.replace(".", " ").lower()
+        searchable_name = name.lower()
+        exchange = str(row.get("exchange") or row.get("exchangeFullName") or row.get("primary_exchange") or "")
+        score = 0
+        if raw_symbol == symbol:
+            score += 120
+        if raw_symbol and symbol.startswith(raw_symbol):
+            score += 55
+        if clean and clean in searchable_symbol:
+            score += 40
+        if clean and clean in searchable_name:
+            score += 45
+        for token in [part for part in clean.split() if len(part) >= 2]:
+            if token in searchable_name:
+                score += 12
+            if token in searchable_symbol:
+                score += 10
+        if exchange.upper() in {"NASDAQ", "NYSE", "XNYS", "XNAS", "AMEX", "ARCX"}:
+            score += 3
+        ranked.append(
+            (
+                score,
+                {
+                    "symbol": symbol,
+                    "name": name,
+                    "exchange": exchange,
+                    "sector": str(row.get("sector") or "Market"),
+                },
+            )
+        )
+    ranked.sort(key=lambda item: (-item[0], item[1]["symbol"]))
+    return [item for _score, item in ranked[:8]]
 
 
 def looks_like_symbol(query: str) -> bool:

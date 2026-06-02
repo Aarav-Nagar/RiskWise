@@ -68,6 +68,17 @@ export async function clearRiskWiseContext(userId) {
   return data;
 }
 
+export async function getRiskWiseContextSummary(userId) {
+  const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context-summary`, {
+    headers: { "X-RiskWise-User-ID": userId }
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(formatApiError(data, response, "Could not load context summary."));
+  }
+  return data;
+}
+
 export async function deleteRiskWiseAccount(userId) {
   const response = await fetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}`, {
     method: "DELETE",

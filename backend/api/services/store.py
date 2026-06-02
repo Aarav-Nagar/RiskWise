@@ -139,6 +139,28 @@ class DemoStore:
         self.users[user_id]["updatedAt"] = utc_now()
         return {"cleared": True, "userId": user_id, "clearedAt": utc_now()}
 
+    def context_summary(self, user_id: str) -> dict[str, Any]:
+        saved_checks = self.saved_checks_by_user.get(user_id, [])
+        threads = [row for row in self.chat_threads.values() if row.get("userId") == user_id]
+        uploaded = 0
+        for rows in self.chat_messages.values():
+            for message in rows:
+                if message.get("userId") != user_id:
+                    continue
+                uploaded += len(message.get("attachments") or [])
+        tickers = {
+            str((item.get("report") or {}).get("ticker") or "").upper()
+            for item in saved_checks
+            if (item.get("report") or {}).get("ticker")
+        }
+        return {
+            "savedChecks": len(saved_checks),
+            "chatThreads": len(threads),
+            "chatMessages": sum(int(row.get("messageCount") or 0) for row in threads),
+            "uploadedScreenshots": uploaded,
+            "watchlist": len(tickers),
+        }
+
     def sync_clerk_user(self, payload: Any) -> dict[str, Any]:
         email = clean_email(payload.email)
         existing = self.find_user_by_email(email)
@@ -384,6 +406,24 @@ class MongoStore(DemoStore):
             return_document=ReturnDocument.AFTER,
         )
         return {"cleared": True, "userId": user_id, "clearedAt": utc_now()}
+
+    def context_summary(self, user_id: str) -> dict[str, Any]:
+        saved_checks = self.db.saved_checks.count_documents({"userId": user_id})
+        chat_threads = self.db.chat_threads.count_documents({"userId": user_id})
+        chat_messages = self.db.chat_messages.count_documents({"userId": user_id})
+        uploaded = self.db.chat_messages.count_documents({"userId": user_id, "attachments.0": {"$exists": True}})
+        tickers = set()
+        for row in self.db.saved_checks.find({"userId": user_id}, {"report.ticker": 1}):
+            ticker = str(((row.get("report") or {}).get("ticker") or "")).upper()
+            if ticker:
+                tickers.add(ticker)
+        return {
+            "savedChecks": saved_checks,
+            "chatThreads": chat_threads,
+            "chatMessages": chat_messages,
+            "uploadedScreenshots": uploaded,
+            "watchlist": len(tickers),
+        }
 
     def sync_clerk_user(self, payload: Any) -> dict[str, Any]:
         email = clean_email(payload.email)

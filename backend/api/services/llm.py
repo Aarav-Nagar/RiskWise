@@ -453,10 +453,12 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
             response["summary_cards"].append({"label": "Earnings", "value": next_event.get("date", "Available"), "tone": "warn"})
             tool_rows.append(["Earnings", str(next_event.get("date") or "Available")])
         elif name == "calculate_breakeven" and result.get("status") == "ok":
+            response["summary_cards"] = [card for card in response["summary_cards"] if card.get("label") != "Breakeven"]
             response["summary_cards"].append({"label": "Breakeven", "value": f"${float(result['breakeven']):,.2f}", "tone": "neutral"})
             tool_rows.append(["Breakeven", f"${float(result['breakeven']):,.2f} via {result.get('formula', 'contract math')}"])
         elif name == "calculate_max_loss" and result.get("status") == "ok":
             if result.get("max_loss") is not None:
+                response["summary_cards"] = [card for card in response["summary_cards"] if card.get("label") != "Max loss"]
                 response["summary_cards"].append({"label": "Max loss", "value": dollars(result.get("max_loss")), "tone": "risk"})
             if result.get("account_risk_pct") is not None:
                 response["summary_cards"].append({"label": "Acct risk", "value": f"{float(result['account_risk_pct']):.2f}%", "tone": "warn"})
@@ -470,9 +472,60 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
             if pending:
                 detail += f"; missing {pending}"
             tool_rows.append(["Options data", detail])
+        elif name == "get_option_chain":
+            status = str(result.get("status") or "unknown")
+            expirations = result.get("expirations") or []
+            contracts = result.get("contracts") or []
+            if expirations:
+                response["summary_cards"].append({"label": "Expirations", "value": str(len(expirations)), "tone": "neutral"})
+            if contracts:
+                response["summary_cards"].append({"label": "Contracts", "value": str(len(contracts)), "tone": "good"})
+            tool_rows.append(
+                [
+                    "Option chain",
+                    f"{status}; {len(expirations)} expirations; {len(contracts)} reference contracts",
+                ]
+            )
+            if contracts:
+                closest_rows = []
+                for contract in contracts[:3]:
+                    closest_rows.append(
+                        [
+                            str(contract.get("contract_type") or "contract").title(),
+                            f"{contract.get('expiration_date', 'exp ?')} ${contract.get('strike_price', '?')} {contract.get('moneynessLabel', '')}".strip(),
+                        ]
+                    )
+                response["visual_blocks"].append({"type": "mini_table", "title": "Nearby reference contracts", "rows": closest_rows})
+        elif name == "get_option_contract":
+            selected = result.get("selected") or {}
+            status = str(result.get("status") or "unknown")
+            contract_symbol = selected.get("contract_symbol") or selected.get("ticker") or "User-entered contract"
+            strike = selected.get("strike") or selected.get("strike_price")
+            expiration = selected.get("expiration") or selected.get("expiration_date")
+            side = selected.get("optionSide") or selected.get("contract_type") or "option"
+            response["summary_cards"].append({"label": "Contract", "value": str(side).title(), "tone": "neutral"})
+            if selected.get("moneynessLabel"):
+                response["summary_cards"].append({"label": "Moneyness", "value": str(selected["moneynessLabel"]).title(), "tone": "warn" if "out" in str(selected["moneynessLabel"]) else "good"})
+            tool_rows.append(["Matched contract", f"{contract_symbol}: {expiration or 'exp ?'} ${strike or '?'} ({status})"])
+            response["visual_blocks"].append(
+                {
+                    "type": "mini_table",
+                    "title": "Selected contract context",
+                    "rows": [
+                        ["Ticker", str(result.get("ticker") or selected.get("symbol") or "")],
+                        ["Contract", f"{str(side).title()} ${strike or '?'}"],
+                        ["Expiration", str(expiration or "Unknown")],
+                        ["Underlying", exact_dollars(selected.get("underlyingPrice")) if selected.get("underlyingPrice") is not None else "Quote unavailable"],
+                    ],
+                }
+            )
         elif name == "get_saved_trade" and result.get("status") == "ok":
             report = result.get("report") or {}
             tool_rows.append(["Saved check", report_title(report)])
+        elif name == "search_ticker" and result.get("items"):
+            matches = result.get("items") or []
+            response["summary_cards"].append({"label": "Ticker matches", "value": str(len(matches)), "tone": "good"})
+            tool_rows.append(["Ticker search", ", ".join(item.get("symbol", "") for item in matches[:4])])
         elif name == "get_current_report":
             tool_rows.append(["Selected check", report_title(result)])
 
@@ -489,10 +542,15 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
                 f"For {ticker}, sector context matters because options react to both the company's move and the broader group it trades with. "
                 "That helps frame risk, but the final contract review still depends on premium, expiration, strike, IV, and liquidity."
             )
-        elif "get_options_context" in used_names:
+        elif "get_option_contract" in used_names:
             response["answer"] = clean_answer(
-                f"For {ticker}, I cannot pull the live option chain in this environment yet. A real chain provider is needed for IV, Greeks, bid/ask, volume, open interest, expirations, and premium. "
-                "Without that, I can explain the structure but should not pretend to know the exact contract price."
+                f"For {ticker}, I can attach the selected contract reference and stock context, but live contract pricing is still the missing piece. "
+                "That means strike, expiration, and moneyness can be reviewed, while exact premium, IV, Greeks, bid/ask, volume, and open interest should stay user-confirmed or provider-backed."
+            )
+        elif "get_option_chain" in used_names or "get_options_context" in used_names:
+            response["answer"] = clean_answer(
+                f"For {ticker}, I can use option-reference context when available, but live option snapshots are still the limiting factor. "
+                "The sharp version needs premium, IV, Greeks, bid/ask, volume, open interest, and the exact expiration chain. Without those, I can review structure and missing risk, but not pretend to know the contract price."
             )
         elif "get_quote" in used_names:
             response["answer"] = clean_answer(
@@ -526,7 +584,14 @@ def report_review_response(current_report: dict[str, Any], attachments: list[dic
     posture = current_report.get("riskPosture") or current_report.get("risk_posture") or "mixed"
     setup_score = int(current_report.get("setupScore") or current_report.get("setup_score") or 60)
     required_move = risk_math.get("required_move_to_breakeven_pct")
-    max_loss = dollars(risk_math.get("max_loss"))
+    amount_at_risk = (
+        risk_math.get("max_loss")
+        or current_report.get("amountAtRisk")
+        or current_report.get("amount_at_risk")
+        or current_report.get("amountRisk")
+        or current_report.get("amount_risk")
+    )
+    max_loss = dollars(amount_at_risk)
     attachment_note = " I also see an attachment, so I would cross-check the visible contract details against the report." if attachments else ""
     answer = (
         f"This looks like a {posture.lower()} risk review. The weak point is {weakest}, and the max loss shown is {max_loss}. "
