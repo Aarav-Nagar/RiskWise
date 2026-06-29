@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-06-29
+
+- Hardened production backend auth around Clerk session JWTs, bearer-token verification, and per-user ownership checks.
+- Wired the Expo frontend API clients to attach Clerk `getToken()` bearer tokens for protected Check, Coach, saved-check, profile, context, and account-deletion calls.
+- Added production readiness reporting for auth, storage, Sentry, AI provider/fallback state, and free honest market-data provider state.
+- Added Docker backend packaging under `backend/api/Dockerfile`.
+- Added a Mongo Atlas persistence smoke script covering profile edits, trade checks, saved checks, chat history, upload metadata, feedback, account deletion cleanup, and deletion-record retention.
+- Expanded tests for missing/invalid tokens, cross-user access, valid protected flows, manual image-review fallback, hosted vision extraction, AI deterministic fallback readiness, and impossible bid/ask rejection.
+- Updated release, QA, TestFlight, backend production, and current-status docs with honest readiness percentages and remaining real-device/deployment gates.
+- Verified locally with `python -m pytest api/tests -q`, `npm run typecheck`, `npm run export:web`, `npx playwright test --config=playwright.config.cjs --reporter=line`, and `npm run doctor`.
+- Remaining production gates: run Mongo smoke with real Atlas env vars, run real Clerk session-token smoke on device, start Docker Desktop and build/deploy the backend image, verify Sentry on the deployed backend, and complete real iPhone TestFlight smoke.
+
 ## 2026-05-31
 
 - Reworked the README around the RiskWise product story.

@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from api.app import app
+from api.settings import settings
 
 
 client = TestClient(app)
@@ -184,6 +185,157 @@ def test_clear_context_keeps_profile_but_removes_analysis_memory():
     assert summary_after.status_code == 200
     assert summary_after.json()["savedChecks"] == 0
     assert summary_after.json()["chatThreads"] == 0
+
+
+def test_context_summary_counts_saved_checks_chat_and_uploads():
+    email = "context-counts@example.com"
+    response = client.post(
+        "/auth/clerk-sync",
+        json={
+            "clerkId": "clerk_context_counts",
+            "name": "Context Counts",
+            "email": email,
+            "accountSize": 25000,
+            "riskBudgetPercent": 2,
+            "purpose": ["Reviewing decisions"],
+            "tradeFocus": ["Options"],
+            "experienceLevel": "Learning",
+            "riskStyle": "Balanced",
+            "struggles": [],
+            "reminders": [],
+            "sectors": [],
+            "marketCaps": [],
+            "events": [],
+            "safetyAccepted": True,
+            "savedContext": {
+                "savedChecks": True,
+                "chatHistory": True,
+                "uploadedScreenshots": True,
+                "watchlist": True,
+            },
+        },
+    )
+    assert response.status_code == 200
+    user = response.json()
+
+    first_saved = client.post(
+        "/saved-checks",
+        json={
+            "user_id": user["id"],
+            "trade_check_id": "check_context_counts_aapl",
+            "report": {"ticker": "AAPL", "riskPosture": "Mixed"},
+            "note": "first",
+        },
+    )
+    second_saved = client.post(
+        "/saved-checks",
+        json={
+            "user_id": user["id"],
+            "trade_check_id": "check_context_counts_msft",
+            "report": {"ticker": "MSFT", "riskPosture": "Elevated"},
+            "note": "second",
+        },
+    )
+    assert first_saved.status_code == 200
+    assert second_saved.status_code == 200
+
+    chat = client.post(
+        "/chat",
+        json={
+            "user_id": user["id"],
+            "message": "Review this uploaded contract",
+            "thread_id": "thread_context_counts",
+            "attachments": [
+                {
+                    "name": "contract.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL 200C 6/21 @ 2.15",
+                }
+            ],
+        },
+    )
+    assert chat.status_code == 200
+
+    summary = client.get(
+        f"/auth/users/{user['id']}/context-summary",
+        headers={"X-RiskWise-User-ID": user["id"]},
+    )
+    assert summary.status_code == 200
+    payload = summary.json()
+    assert payload["savedChecks"] >= 2
+    assert payload["chatThreads"] >= 1
+    assert payload["chatMessages"] >= 2
+    assert payload["uploadedScreenshots"] >= 1
+    assert payload["watchlist"] >= 2
+
+
+def test_check_extraction_persists_upload_metadata_without_raw_file_data():
+    email = "extract-upload-context@example.com"
+    response = client.post(
+        "/auth/clerk-sync",
+        json={
+            "clerkId": "clerk_extract_upload_context",
+            "name": "Extract Upload",
+            "email": email,
+            "accountSize": 25000,
+            "riskBudgetPercent": 2,
+            "purpose": ["Reviewing decisions"],
+            "tradeFocus": ["Options"],
+            "experienceLevel": "Learning",
+            "riskStyle": "Balanced",
+            "struggles": [],
+            "reminders": [],
+            "sectors": [],
+            "marketCaps": [],
+            "events": [],
+            "safetyAccepted": True,
+        },
+    )
+    assert response.status_code == 200
+    user = response.json()
+
+    extraction = client.post(
+        "/extract-contract",
+        json={
+            "user_id": user["id"],
+            "attachments": [
+                {
+                    "name": "contract.csv",
+                    "type": "text/csv",
+                    "source": "files",
+                    "text": "Ticker,AAPL\nContract,AAPL 200C 6/21 @ 2.15 Qty 3",
+                    "dataUrl": "data:image/png;base64,SHOULD_NOT_BE_STORED",
+                }
+            ],
+        },
+        headers={"X-RiskWise-User-ID": user["id"]},
+    )
+    assert extraction.status_code == 200
+    assert extraction.json()["fields"]["ticker"] == "AAPL"
+    assert "missing_live_fields" in extraction.json()
+
+    summary = client.get(
+        f"/auth/users/{user['id']}/context-summary",
+        headers={"X-RiskWise-User-ID": user["id"]},
+    )
+    assert summary.status_code == 200
+    assert summary.json()["uploadedScreenshots"] >= 1
+
+
+def test_production_user_routes_reject_mismatched_auth_header():
+    previous = settings.environment
+    settings.environment = "production"
+    try:
+        response = client.get(
+            "/saved-checks/user_profile_owner",
+            headers={"X-RiskWise-User-ID": "different_user"},
+        )
+    finally:
+        settings.environment = previous
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Authorization bearer token is required."
 
 
 def test_delete_user_removes_profile_and_saved_context():

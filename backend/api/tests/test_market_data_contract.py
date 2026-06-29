@@ -55,8 +55,29 @@ def test_options_context_is_honest_about_missing_contract_feed() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["ticker"] == "AAPL"
-    assert "live_premium" in body["fields_pending"] or "option_chain" in body["fields_pending"]
-    assert "polygon" in body["message"].lower() or "tradier" in body["message"].lower() or "massive" in body["message"].lower()
+    pending = set(body["fields_pending"])
+    assert pending.intersection({"provider_reported_greeks", "real_time_opra_snapshot", "option_chain", "live_premium"})
+    assert (
+        "delayed" in body["message"].lower()
+        or "polygon" in body["message"].lower()
+        or "tradier" in body["message"].lower()
+        or "massive" in body["message"].lower()
+    )
+
+
+def test_market_provider_status_is_explicit_and_secret_safe() -> None:
+    response = client.get("/market/providers")
+
+    assert response.status_code == 200
+    body = response.json()
+    providers = {item["provider"]: item for item in body["capabilities"]}
+    assert body["strategy"] == "free_honest_stack"
+    assert "manual_upload" in providers
+    assert "yfinance_delayed" in providers
+    assert "Reference-only" in body["data_quality_labels"]
+    serialized = str(body).lower()
+    assert "api_key" not in serialized
+    assert "secret" not in serialized
 
 
 def test_options_chain_endpoint_does_not_fake_contracts() -> None:
@@ -67,6 +88,11 @@ def test_options_chain_endpoint_does_not_fake_contracts() -> None:
     if body["provider"] == "massive_polygon_reference":
         assert body["status"] in {"reference_chain_ready", "reference_chain_empty"}
         assert "premium" not in str(body["contracts"]).lower()
+    elif body["provider"] == "yfinance_delayed":
+        assert body["status"] == "delayed_chain_ready"
+        assert "delayed" in body["message"].lower()
+        assert all(contract.get("has_live_quote") is False for contract in body["contracts"][:10])
+        assert all(str(contract.get("data_quality")).lower() == "delayed" for contract in body["contracts"][:10])
     else:
         assert body["status"] == "requires_options_provider"
         assert body["contracts"] == []
@@ -108,6 +134,31 @@ def test_trade_check_rejects_past_expiration() -> None:
 
     assert response.status_code == 400
     assert "expiration" in response.json()["detail"].lower()
+
+
+def test_trade_check_rejects_impossible_bid_ask() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Call Option (Long)",
+            "strike": 190,
+            "expiration": expiration,
+            "premium": 2.15,
+            "contracts": 1,
+            "bid": 2.4,
+            "ask": 2.1,
+            "amount_at_risk": 215,
+            "timeframe": "1-2 Weeks",
+            "account_size": 25000,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "bid" in response.json()["detail"].lower()
+    assert "ask" in response.json()["detail"].lower()
 
 
 def test_trade_check_returns_expiration_aware_agent_detail() -> None:

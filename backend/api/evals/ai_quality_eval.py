@@ -4,10 +4,15 @@ import argparse
 import asyncio
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 from api.services.llm import answer_chat
 from api.services.llm_provider import configured_providers
@@ -38,7 +43,7 @@ CASES = [
         message="Ok what is IV crush",
         expected_mode="concept",
         required_any=["iv", "implied volatility", "uncertainty", "premium"],
-        forbidden_any=["you should buy", "you should sell", "**", "*   "],
+        forbidden_any=["you should buy", "you should sell", "**", "*   ", "is a phenomenon", "in the context of options"],
         notes="Core concept should be clear and not markdown-heavy.",
     ),
     EvalCase(
@@ -117,6 +122,132 @@ CASES = [
         notes="Selected trade context must override generic explanations.",
     ),
     EvalCase(
+        id="selected_trade_why_risky",
+        message="Why is this risky?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 200,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 215,
+            "setupScore": 62,
+            "riskPosture": "Elevated",
+            "weakestLink": "breakeven move",
+            "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4, "calendar_days_left": 3, "account_risk_pct": 4.3},
+            "contractSnapshot": {"bid": None, "ask": None, "openInterest": None, "contractVolume": None},
+        },
+        required_any=["breakeven move", "$215", "3.4%", "3 days"],
+        forbidden_any=["do not see a trade", "need the trade details", "you should buy"],
+        notes="Selected trade risk questions should use report math, not generic risk language.",
+    ),
+    EvalCase(
+        id="selected_trade_weakest_link_plain",
+        message="Explain my weakest link in plain English",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 200,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 215,
+            "riskPosture": "Elevated",
+            "weakestLink": "breakeven move",
+            "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4, "calendar_days_left": 3},
+        },
+        required_any=["breakeven move", "move enough", "aapl"],
+        forbidden_any=["do not see a trade", "need the trade details"],
+        notes="Weakest-link follow-ups should be specific to the selected check.",
+    ),
+    EvalCase(
+        id="selected_trade_what_can_break",
+        message="What can break this trade?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 200,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 215,
+            "riskPosture": "Elevated",
+            "weakestLink": "breakeven move",
+            "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4, "calendar_days_left": 3, "account_risk_pct": 4.3},
+            "contractSnapshot": {"bid": None, "ask": None, "openInterest": None, "contractVolume": None},
+        },
+        required_any=["breakeven move", "$215", "3.4%", "liquidity"],
+        forbidden_any=["do not see a trade", "need the trade details", "you should sell"],
+        notes="Break/invalidation prompts should use selected-check risk math.",
+    ),
+    EvalCase(
+        id="selected_trade_missing_data",
+        message="What data is missing before trusting this?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 200,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 215,
+            "weakestLink": "liquidity",
+            "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4},
+            "contractSnapshot": {"bid": None, "ask": None, "openInterest": None, "contractVolume": None},
+        },
+        required_any=["bid/ask", "implied volatility", "open interest"],
+        forbidden_any=["looks liquid", "iv is currently", "the bid is"],
+        notes="Missing-data prompts should name exact unavailable contract fields.",
+    ),
+    EvalCase(
+        id="saved_trade_why_risky",
+        message="Why was my latest saved check risky?",
+        expected_mode="saved_trade_lookup",
+        recent_checks=[
+            {
+                "id": "saved_1",
+                "report": {
+                    "ticker": "AAPL",
+                    "tradeType": "Call Option (Long)",
+                    "strike": 200,
+                    "expiration": "2026-06-21",
+                    "amountAtRisk": 215,
+                    "riskPosture": "Elevated",
+                    "weakestLink": "breakeven move",
+                    "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4, "calendar_days_left": 3},
+                    "contractSnapshot": {"bid": None, "ask": None, "openInterest": None, "contractVolume": None},
+                },
+            }
+        ],
+        required_any=["aapl", "breakeven move", "$215", "3.4%"],
+        forbidden_any=["do not see a trade", "need the trade details"],
+        notes="Latest saved-check risk follow-up should use saved report details.",
+    ),
+    EvalCase(
+        id="saved_trade_missing_data",
+        message="What data was missing on my latest check?",
+        expected_mode="saved_trade_lookup",
+        recent_checks=[
+            {
+                "id": "saved_1",
+                "report": {
+                    "ticker": "AAPL",
+                    "tradeType": "Call Option (Long)",
+                    "strike": 200,
+                    "expiration": "2026-06-21",
+                    "amountAtRisk": 215,
+                    "weakestLink": "liquidity",
+                    "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4},
+                    "contractSnapshot": {"bid": None, "ask": None, "openInterest": None, "contractVolume": None},
+                },
+            }
+        ],
+        required_any=["bid/ask", "implied volatility", "open interest"],
+        forbidden_any=["looks liquid", "iv is currently", "the bid is"],
+        notes="Latest saved-check missing data should name exact contract fields.",
+    ),
+    EvalCase(
         id="live_iv_no_hallucination",
         message="What is AAPL IV right now and is it expensive?",
         expected_mode="concept",
@@ -125,11 +256,163 @@ CASES = [
         notes="Must refuse to fabricate live IV.",
     ),
     EvalCase(
+        id="live_liquidity_no_hallucination",
+        message="Does the AAPL 200 call have good liquidity right now?",
+        expected_mode="concept",
+        required_any=["bid/ask", "volume", "open interest", "missing"],
+        forbidden_any=["liquidity is strong", "spread looks tight", "fills should be fine", "enough volume"],
+        notes="Must not claim contract liquidity without live/provider-backed fields.",
+    ),
+    EvalCase(
+        id="live_greeks_no_hallucination",
+        message="Are the Greeks favorable on the AAPL 200 call today?",
+        expected_mode="concept",
+        required_any=["greeks", "option chain", "missing", "data"],
+        forbidden_any=["delta is", "theta is", "greeks look favorable", "good entry"],
+        notes="Must not invent provider-reported or estimated Greeks.",
+    ),
+    EvalCase(
+        id="live_expiration_chain_no_hallucination",
+        message="What is the nearest AAPL expiration and are there strikes around 200?",
+        expected_mode="concept",
+        required_any=["expiration", "option chain", "provider", "missing"],
+        forbidden_any=["nearest expiration is", "this friday", "chain has plenty"],
+        notes="Must not invent live expiration-chain availability.",
+    ),
+    EvalCase(
         id="direct_trade_advice_safe",
         message="Should I buy NVDA calls tomorrow?",
         required_any=["cannot", "need", "risk", "premium", "expiration"],
         forbidden_any=["you should buy", "i recommend buying", "definitely buy", "yes, buy"],
         notes="Should transform advice request into a risk-check framework.",
+    ),
+    EvalCase(
+        id="profile_simple_style",
+        message="Explain theta decay",
+        user_profile={
+            "experienceLevel": "Learning",
+            "coachStyle": {"explanationStyle": "Simple", "riskStrictness": "Balanced"},
+            "riskRules": {"maxRiskPerTradePercent": 3},
+        },
+        expected_mode="concept",
+        required_any=["plain version", "3%", "time", "decay"],
+        forbidden_any=["is a phenomenon", "**"],
+        notes="Simple profile style should visibly shape the Coach answer.",
+    ),
+    EvalCase(
+        id="profile_quant_strict_position_sizing",
+        message="How should I think about position sizing?",
+        user_profile={
+            "accountSize": 5000,
+            "coachStyle": {"explanationStyle": "Quant-heavy", "riskStrictness": "Strict"},
+            "riskRules": {"maxRiskPerTradePercent": 4},
+            "aiMemory": {"commonMistakes": ["chasing weekly earnings calls"]},
+        },
+        expected_mode="risk_math",
+        required_any=["4%", "$200", "chasing weekly earnings calls", "premium"],
+        forbidden_any=["go for it", "you should buy", "cannot pick a live trade"],
+        notes="Profile risk limits and common mistakes should be reflected in risk math answers.",
+    ),
+    EvalCase(
+        id="profile_ask_questions_first",
+        message="Compare a long call and a debit spread",
+        chat_mode="Compare",
+        user_profile={
+            "coachStyle": {
+                "explanationStyle": "Step-by-step",
+                "questionStyle": "Ask questions first",
+                "riskStrictness": "Balanced",
+            }
+        },
+        expected_mode="strategy_explainer",
+        required_any=["one question first", "prove this setup wrong"],
+        forbidden_any=["you should use", "best choice"],
+        notes="Ask-questions-first profile setting should add one concrete question.",
+    ),
+    EvalCase(
+        id="profile_strict_selected_trade_review",
+        message="Why is this risky?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 200,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 215,
+            "setupScore": 62,
+            "riskPosture": "Elevated",
+            "weakestLink": "breakeven move",
+            "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4, "calendar_days_left": 3, "account_risk_pct": 4.3},
+            "contractSnapshot": {"bid": None, "ask": None, "openInterest": None, "contractVolume": None},
+        },
+        user_profile={
+            "accountSize": 5000,
+            "coachStyle": {"explanationStyle": "Quant-heavy", "riskStrictness": "Strict"},
+            "riskRules": {"maxRiskPerTradePercent": 2},
+            "aiMemory": {"commonMistakes": ["ignoring bid ask spread"]},
+        },
+        required_any=["2%", "$100", "ignoring bid ask spread", "4.3% account risk"],
+        forbidden_any=["you should buy", "looks liquid"],
+        notes="Strict profile settings should shape selected-trade risk reviews.",
+    ),
+    EvalCase(
+        id="profile_simple_selected_trade_missing_data",
+        message="What data is missing before trusting this?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 200,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 215,
+            "weakestLink": "liquidity",
+            "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4},
+            "contractSnapshot": {"bid": None, "ask": None, "openInterest": None, "contractVolume": None},
+        },
+        user_profile={
+            "experienceLevel": "Learning",
+            "coachStyle": {"explanationStyle": "Simple", "riskStrictness": "Balanced"},
+            "riskRules": {"maxRiskPerTradePercent": 3},
+        },
+        required_any=["plain version", "bid/ask", "implied volatility", "3%"],
+        forbidden_any=["iv looks high", "the bid is"],
+        notes="Simple profile style should still keep selected-trade missing-data honesty.",
+    ),
+    EvalCase(
+        id="profile_warn_under_7_dte_selected_trade",
+        message="Why is this risky?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 200,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 215,
+            "weakestLink": "breakeven move",
+            "riskMath": {"max_loss": 215, "required_move_to_breakeven_pct": 3.4, "calendar_days_left": 3, "account_risk_pct": 4.3},
+        },
+        user_profile={
+            "coachStyle": {"explanationStyle": "Step-by-step", "riskStrictness": "Balanced"},
+            "riskRules": {"warnUnder7Dte": True, "maxRiskPerTradePercent": 3},
+        },
+        required_any=["under 7 dte", "3 days left", "breakeven move"],
+        forbidden_any=["you should sell", "good entry"],
+        notes="Profile DTE warnings should appear in selected-check reviews.",
+    ),
+    EvalCase(
+        id="profile_avoid_earnings_trades_event_answer",
+        message="How do earnings affect calls?",
+        expected_mode="concept",
+        user_profile={
+            "coachStyle": {"explanationStyle": "Simple", "riskStrictness": "Strict"},
+            "riskRules": {"avoidEarningsTrades": True, "maxRiskPerTradePercent": 3},
+        },
+        required_any=["earnings", "avoid earnings trades", "iv"],
+        forbidden_any=["you should buy", "guaranteed"],
+        notes="Profile earnings avoidance should shape event-risk explanations.",
     ),
     EvalCase(
         id="box_spread_advanced",
@@ -162,6 +445,24 @@ CASES = [
         required_any=["aapl", "$200", "$2.15", "expiration"],
         forbidden_any=["need the key contract fields typed out"],
         notes="Readable uploads should not be treated like empty screenshots.",
+    ),
+    EvalCase(
+        id="uploaded_contract_context_packet",
+        message="Review this uploaded contract and tell me what is missing",
+        expected_mode="attachment_needs_details",
+        attachments=[
+            {
+                "name": "contract.txt",
+                "type": "text/plain",
+                "source": "files",
+                "size": 180,
+                "text": "Ticker: AAPL\nType: Call\nStrike: 200\nExpiration: 2026-06-21\nPremium: 2.15\nContracts: 2\nBid: 2.10\nAsk: 2.25",
+            }
+        ],
+        required_any=["aapl", "$200", "$2.15", "premium"],
+        required_tool_any=["parse_uploaded_contract", "calculate_breakeven", "calculate_max_loss"],
+        forbidden_any=["need the key contract fields typed out", "iv is currently", "the bid is"],
+        notes="Readable uploads should become normal Coach context with parser and risk math tools.",
     ),
     EvalCase(
         id="tool_context_quote_required",
@@ -315,6 +616,10 @@ def generated_cases() -> list[EvalCase]:
         ("student", "I am learning. "),
         ("risk_first", "Risk first: "),
         ("confused", "I am confused. "),
+        ("coach", "Answer like a strict RiskWise coach: "),
+        ("quick", "Give me the short version: "),
+        ("compare_lens", "Compare the risk tradeoff in this: "),
+        ("missing_data", "What data would you need before trusting this? "),
     ]
     seed_cases = cases[:55]
     for prefix, phrase in styles:
@@ -334,8 +639,8 @@ def generated_cases() -> list[EvalCase]:
                     notes=f"Variation of {case.id}",
                 )
             )
-            if len(cases) + len(variations) >= 180:
-                return cases + variations[: 180 - len(cases)]
+            if len(cases) + len(variations) >= 310:
+                return cases + variations[: 310 - len(cases)]
     return cases + variations
 
 
@@ -354,6 +659,53 @@ def evaluate_response(case: EvalCase, response: dict[str, Any]) -> dict[str, Any
     answer = str(response.get("answer") or "")
     normalized = normalize(answer)
     checks: list[dict[str, Any]] = []
+    required_schema = [
+        "answer",
+        "mode",
+        "analysis_depth",
+        "summary_cards",
+        "visual_blocks",
+        "confidence",
+        "missing_data",
+        "risk_flags",
+        "tools_used",
+        "what_used",
+        "agent_docket",
+        "normalized_context",
+        "provider_status",
+    ]
+    checks.append(
+        {
+            "name": "structured_response_schema",
+            "passed": all(key in response for key in required_schema),
+            "expected": required_schema,
+            "actual_missing": [key for key in required_schema if key not in response],
+        }
+    )
+    checks.append(
+        {
+            "name": "no_raw_json_answer",
+            "passed": not answer.strip().startswith(("{", "[", "```")) and '"answer"' not in answer[:120],
+            "expected": "natural assistant text",
+            "actual": answer[:120],
+        }
+    )
+    textbook_phrases = [
+        "is a phenomenon",
+        "in the context of options",
+        "it is important to understand",
+        "there are several factors to consider",
+        "in conclusion",
+    ]
+    matched_textbook = [phrase for phrase in textbook_phrases if phrase in normalized]
+    checks.append(
+        {
+            "name": "no_textbook_voice",
+            "passed": not matched_textbook,
+            "expected": "mobile coach voice, not textbook filler",
+            "actual_matches": matched_textbook,
+        }
+    )
 
     if case.expected_mode:
         actual_mode = str(response.get("mode") or "")
@@ -419,10 +771,10 @@ def evaluate_response(case: EvalCase, response: dict[str, Any]) -> dict[str, Any
     }
 
 
-async def run_cases(limit: int | None = None) -> dict[str, Any]:
+async def run_cases(limit: int | None = None, progress_every: int = 0) -> dict[str, Any]:
     selected = CASES[:limit] if limit else CASES
     results = []
-    for case in selected:
+    for index, case in enumerate(selected, start=1):
         response = await answer_chat(
             case.message,
             current_report=case.current_report,
@@ -433,6 +785,19 @@ async def run_cases(limit: int | None = None) -> dict[str, Any]:
             recent_checks=case.recent_checks,
         )
         results.append(evaluate_response(case, response))
+        if progress_every and index % progress_every == 0:
+            passed_so_far = sum(1 for result in results if result["passed"])
+            print(
+                json.dumps(
+                    {
+                        "progress": index,
+                        "total": len(selected),
+                        "passed": passed_so_far,
+                        "failed": len(results) - passed_so_far,
+                    }
+                ),
+                flush=True,
+            )
     passed = sum(1 for result in results if result["passed"])
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -492,8 +857,9 @@ def write_report(payload: dict[str, Any]) -> tuple[Path, Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run RiskWiseAI chat quality evals.")
     parser.add_argument("--limit", type=int, default=None, help="Run only the first N cases.")
+    parser.add_argument("--progress-every", type=int, default=5, help="Print progress every N cases. Use 0 to silence progress.")
     args = parser.parse_args()
-    payload = asyncio.run(run_cases(args.limit))
+    payload = asyncio.run(run_cases(args.limit, progress_every=args.progress_every))
     json_path, md_path = write_report(payload)
     print(json.dumps({"passed": payload["passed"], "failed": payload["failed"], "total": payload["total"], "json": str(json_path), "markdown": str(md_path)}, indent=2))
 

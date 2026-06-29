@@ -29,6 +29,8 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
             raise ValueError("Premium cannot be negative.")
         if contracts < 1:
             raise ValueError("Contracts must be at least 1.")
+        if request.bid is not None and request.ask is not None and request.bid > request.ask:
+            raise ValueError("Bid cannot be greater than ask for an option contract.")
         calculated_risk = round(premium * contracts * 100, 2) if premium else None
         if calculated_risk is not None and calculated_risk > 0:
             drift = abs(calculated_risk - request.amount_at_risk)

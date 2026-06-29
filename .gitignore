@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-web/
 .expo/
 .env
 .env.*
@@ -7,9 +8,16 @@ dist/
 config/.env
 logs/
 *.log
+riskwise-*.png
+Screenshots/
+backend/api/evals/results/
+docs/qa_runs/
+frontend/mobile-demo/playwright-report/
+frontend/mobile-demo/test-results/
 
 frontend/mobile-demo/node_modules/
 frontend/mobile-demo/dist/
+frontend/mobile-demo/dist-web/
 frontend/mobile-demo/.expo/
 frontend/mobile-demo/.expo-shared/
 frontend/mobile-demo/.env
@@ -23,6 +31,7 @@ backend/api/.env.*
 !backend/api/.env.example
 *.pyc
 .pytest_cache/
+**/.pytest_cache/
 .venv/
 venv/
 

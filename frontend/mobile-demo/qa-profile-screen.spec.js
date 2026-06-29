@@ -1,20 +1,17 @@
 const { test, expect } = require("@playwright/test");
+const { collectBrowserErrors, filteredErrors, installBackendMocks } = require("./qa-helpers");
 
 test.use({
-  viewport: { width: 430, height: 900 },
-  launchOptions: {
-    executablePath: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
-  }
+  viewport: { width: 430, height: 900 }
 });
 
-test("profile screen shows trader identity, rules, preferences, and security actions", async ({ page }) => {
-  const errors = [];
-  page.on("console", (message) => {
-    if (message.type() === "error") errors.push(message.text());
-  });
-  page.on("pageerror", (error) => errors.push(error.message));
+const PREVIEW_PATH = "/?riskwise_preview=1";
 
-  await page.goto("http://127.0.0.1:8097?riskwise_preview=1");
+test("profile screen shows trader identity, rules, preferences, and security actions", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+
+  await installBackendMocks(page);
+  await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
   await page.getByText("Profile", { exact: true }).last().click();
 
   await expect(page.getByText("Overview")).toBeVisible();
@@ -58,10 +55,5 @@ test("profile screen shows trader identity, rules, preferences, and security act
   await expect(page.getByText("Delete account data?")).toBeVisible();
   await page.getByText("Cancel").click();
 
-  expect(
-    errors
-      .filter((message) => !message.includes("favicon"))
-      .filter((message) => !message.includes("File not found"))
-      .join("\n")
-  ).toBe("");
+  expect(filteredErrors(errors)).toBe("");
 });

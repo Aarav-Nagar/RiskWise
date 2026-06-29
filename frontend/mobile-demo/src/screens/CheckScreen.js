@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
+import * as ImagePicker from "expo-image-picker";
 import { Card } from "../components/Card";
 import { ErrorCard, Header, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
-import { getMarketBundle, getOptionsChain, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
+import { extractContractFromAttachment, getMarketBundle, getOptionsChain, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
 const popularSymbols = ["AAPL", "NVDA", "SPY", "MSFT", "QQQ"];
@@ -56,7 +59,7 @@ const flowChoices = [
     icon: "camera-outline",
     title: "Screenshot",
     subtitle: "I have a contract screenshot from a trading platform.",
-    body: "Mock extraction reads the image, asks you to confirm, then runs the same check."
+    body: "Upload a real screenshot. RiskWise reads visible fields, then asks you to confirm before analysis."
   }
 ];
 
@@ -90,7 +93,7 @@ const platforms = ["Robinhood", "Webull", "Thinkorswim", "Fidelity"];
 const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const dayLabels = ["S", "M", "T", "W", "T", "F", "S"];
 
-export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
+export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) {
   const [flow, setFlow] = useState("start");
   const [step, setStep] = useState(1);
   const [selectedTicker, setSelectedTicker] = useState(() => symbolToItem(draft.ticker, draft.tickerName, draft.tickerExchange));
@@ -105,9 +108,14 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
   const [runningProgress, setRunningProgress] = useState(0);
   const [localReport, setLocalReport] = useState(null);
   const [extractionStep, setExtractionStep] = useState(1);
+  const [extraction, setExtraction] = useState(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState("");
 
   const calculations = useMemo(() => buildRiskMath(draft), [draft]);
   const optionValidation = useMemo(() => validateOptionContract(draft, selectedTicker, calculations), [draft, selectedTicker, calculations]);
+  const missingDataWarnings = useMemo(() => buildMissingDataWarnings(draft, market), [draft, market]);
+  const extractionStatus = useMemo(() => buildExtractionStatus(draft, extraction), [draft, extraction]);
 
   useEffect(() => {
     const query = tickerQuery.trim();
@@ -119,6 +127,7 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
     }
 
     setSearching(true);
+    setTickerResults(buildSearchResults(query, []));
     const timeout = setTimeout(async () => {
       try {
         const remoteRows = await searchMarketSymbols(query);
@@ -286,44 +295,64 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
       setLocalReport(buildLocalResult(report, draft, selectedTicker, calculations));
       setTimeout(() => setFlow("results"), 250);
     } catch {
-      setFlow("option");
-      setStep(6);
+      if (flow === "screenshot") {
+        setFlow("screenshot");
+        setExtractionStep(4);
+      } else {
+        setFlow("option");
+        setStep(7);
+      }
     }
   }
 
-  function mockScreenshotUpload() {
-    const extracted = {
-      ticker: "AAPL",
-      tickerName: "Apple Inc.",
-      tickerExchange: "NASDAQ",
-      direction: "bullish",
-      structure: "call",
-      optionSide: "call",
-      tradeType: "Call Option (Long)",
-      expiration: estimateExpirationFromHorizon("short"),
-      expirationSource: "screenshot_mock",
-      strike: "200",
-      premium: "2.15",
-      bid: "2.10",
-      ask: "2.20",
-      impliedVolatility: "22.4",
-      openInterest: "12345",
-      contractVolume: "8210",
-      contracts: "1",
-      underlyingPrice: "197.02",
-      amountAtRisk: "215",
-      timeframe: "1-2 Weeks"
-    };
-    setSelectedTicker(symbolToItem("AAPL", "Apple Inc.", "NASDAQ"));
-    setTickerQuery("AAPL");
-    updateDraft(extracted);
-    setExtractionStep(2);
+  async function startScreenshotUpload(source = "library") {
+    setExtractionError("");
+    setExtraction(null);
+    let attachment = null;
+    try {
+      if (Platform.OS === "web" && typeof document !== "undefined") {
+        attachment = await pickWebScreenshot(source);
+      } else {
+        attachment = await pickNativeScreenshot(source);
+      }
+      if (!attachment) {
+        return;
+      }
+      setExtracting(true);
+      setExtractionStep(2);
+      const result = await extractContractFromAttachment({
+        user,
+        attachments: [attachment]
+      });
+      const fields = result.fields || {};
+      setExtraction(result);
+      if (fields.ticker) {
+        setSelectedTicker(symbolToItem(fields.ticker, fields.tickerName || fields.ticker, fields.tickerExchange || "Uploaded"));
+        setTickerQuery(fields.ticker);
+      }
+      const nextDraft = {
+        ...fields,
+        structure: fields.structure || fields.optionSide || draft.structure || "call",
+        tradeType: fields.tradeType || tradeTypeFromStructure(fields.structure || fields.optionSide || draft.structure || "call"),
+        expirationSource: "uploaded_screenshot",
+        contracts: fields.contracts || draft.contracts || "1",
+        amountAtRisk: estimateUploadedRisk(fields, draft),
+        timeframe: draft.timeframe || "1-2 Weeks"
+      };
+      updateDraft(nextDraft);
+      setExtractionStep(3);
+    } catch (err) {
+      setExtractionError(err?.message || "Could not extract this screenshot. Try a clearer image or enter the contract manually.");
+      setExtractionStep(1);
+    } finally {
+      setExtracting(false);
+    }
   }
 
   if (flow === "option") {
     return (
       <ScreenScroll>
-        <FlowTopBar title="Build Your Trade" step={step} total={6} onBack={() => (step === 1 ? chooseFlow("start") : setStep(step - 1))} />
+        <FlowTopBar title="Build Your Trade" step={step} total={7} onBack={() => (step === 1 ? chooseFlow("start") : setStep(step - 1))} />
         {step === 1 && (
           <TickerStep
             title="Select Ticker"
@@ -406,7 +435,20 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
               }
             }}
             adjustContracts={adjustContracts}
-            onSubmit={runRiskCheck}
+            onReview={() => setStep(7)}
+            loading={loading}
+            error={error}
+          />
+        )}
+        {step === 7 && (
+          <ReviewTradeStep
+            draft={draft}
+            calculations={calculations}
+            validation={optionValidation}
+            missingData={missingDataWarnings}
+            onEditContract={() => setStep(5)}
+            onEditSize={() => setStep(6)}
+            onRun={runRiskCheck}
             loading={loading}
             error={error}
           />
@@ -483,10 +525,19 @@ export function CheckScreen({ draft, setDraft, onCheck, loading, error }) {
     return (
       <ScreenScroll>
         <FlowTopBar title="Screenshot Flow" step={extractionStep} total={5} onBack={() => (extractionStep === 1 ? chooseFlow("start") : setExtractionStep(extractionStep - 1))} />
-        {extractionStep === 1 && <UploadStep onUpload={mockScreenshotUpload} />}
-        {extractionStep === 2 && <ExtractionStep onContinue={() => setExtractionStep(3)} />}
-        {extractionStep === 3 && <ExtractedReviewStep draft={draft} onEdit={() => { setFlow("option"); setStep(5); }} onContinue={() => setExtractionStep(4)} />}
-        {extractionStep === 4 && <ConfirmContractStep draft={draft} calculations={calculations} onContinue={() => setExtractionStep(5)} />}
+        {extractionStep === 1 && <UploadStep onUpload={startScreenshotUpload} extracting={extracting} error={extractionError} />}
+        {extractionStep === 2 && <ExtractionStep extracting={extracting} extraction={extraction} onContinue={() => setExtractionStep(3)} />}
+        {extractionStep === 3 && <ExtractedReviewStep draft={draft} extraction={extraction} status={extractionStatus} onEdit={() => { setFlow("option"); setStep(5); }} onContinue={() => setExtractionStep(4)} />}
+        {extractionStep === 4 && (
+          <ConfirmContractStep
+            draft={draft}
+            calculations={calculations}
+            validation={optionValidation}
+            missingData={missingDataWarnings}
+            onEdit={() => { setFlow("option"); setStep(5); }}
+            onContinue={() => setExtractionStep(5)}
+          />
+        )}
         {extractionStep === 5 && <RunningStep progress={82} onContinue={runRiskCheck} loading={loading} error={error} buttonLabel="View Investigation Results" />}
       </ScreenScroll>
     );
@@ -733,7 +784,7 @@ function MiniCalendar({ visibleMonth, selected, setVisibleMonth, onSelect }) {
         </Pressable>
       </View>
       <View style={styles.weekRow}>
-        {dayLabels.map((day) => <Text key={day} style={styles.weekLabel}>{day}</Text>)}
+        {dayLabels.map((day, index) => <Text key={`${day}-${index}`} style={styles.weekLabel}>{day}</Text>)}
       </View>
       <View style={styles.daysGrid}>
         {cells.map(({ date, inMonth }) => {
@@ -756,7 +807,7 @@ function MiniCalendar({ visibleMonth, selected, setVisibleMonth, onSelect }) {
 }
 
 function ContractDetailsStep({ draft, setNumericField, validation, contractReferences = [], providerMessage = "", onSelectContract, onContinue }) {
-  const requiredReady = !validation.strike && !validation.premium;
+  const requiredReady = !validation.strike && !validation.premium && !validation.bidAsk && !validation.impliedVolatility && !validation.openInterest && !validation.contractVolume;
   const side = draft.optionSide || (draft.structure?.includes("put") ? "put" : "call");
   const referenceRows = contractReferences
     .filter((contract) => !side || contract.contract_type === side)
@@ -800,10 +851,10 @@ function ContractDetailsStep({ draft, setNumericField, validation, contractRefer
       <FieldRow label="Strike Price" value={draft.strike} onChangeText={(value) => setNumericField("strike", value)} prefix="$" error={validation.strike} />
       <FieldRow label="Premium (Mid)" value={draft.premium} onChangeText={(value) => setNumericField("premium", value)} prefix="$" error={validation.premium} />
       <FieldRow label="Bid" value={draft.bid} onChangeText={(value) => setNumericField("bid", value)} prefix="$" />
-      <FieldRow label="Ask" value={draft.ask} onChangeText={(value) => setNumericField("ask", value)} prefix="$" />
-      <FieldRow label="IV (Implied Volatility)" value={draft.impliedVolatility} onChangeText={(value) => setNumericField("impliedVolatility", value)} suffix="%" />
-      <FieldRow label="Open Interest" value={draft.openInterest} onChangeText={(value) => setNumericField("openInterest", value)} />
-      <FieldRow label="Volume" value={draft.contractVolume} onChangeText={(value) => setNumericField("contractVolume", value)} />
+      <FieldRow label="Ask" value={draft.ask} onChangeText={(value) => setNumericField("ask", value)} prefix="$" error={validation.bidAsk} />
+      <FieldRow label="IV (Implied Volatility)" value={draft.impliedVolatility} onChangeText={(value) => setNumericField("impliedVolatility", value)} suffix="%" error={validation.impliedVolatility} />
+      <FieldRow label="Open Interest" value={draft.openInterest} onChangeText={(value) => setNumericField("openInterest", value)} error={validation.openInterest} />
+      <FieldRow label="Volume" value={draft.contractVolume} onChangeText={(value) => setNumericField("contractVolume", value)} error={validation.contractVolume} />
       <Text style={styles.helperText}>Bid/ask helps us check liquidity and estimated cost. IV, open interest, and volume make the risk read stronger.</Text>
       <PrimaryButton label="Continue" onPress={onContinue} disabled={!requiredReady} />
     </View>
@@ -827,7 +878,7 @@ function FieldRow({ label, value, onChangeText, prefix, suffix, error }) {
   );
 }
 
-function SizeStep({ draft, calculations, validation, setNumericField, setMaxRiskRule, adjustContracts, onSubmit, loading, error }) {
+function SizeStep({ draft, calculations, validation, setNumericField, setMaxRiskRule, adjustContracts, onReview, loading, error }) {
   const tone = calculations.accountRiskPercent <= riskRulePercent(draft) ? "good" : calculations.accountRiskPercent <= riskRulePercent(draft) * 1.5 ? "warn" : "risk";
   return (
     <View>
@@ -843,8 +894,8 @@ function SizeStep({ draft, calculations, validation, setNumericField, setMaxRisk
           <Pressable style={styles.stepperButton} onPress={() => adjustContracts(1)}><Text style={styles.stepperText}>+</Text></Pressable>
         </View>
       </View>
-      <FieldRow label="Account Size" value={String(draft.accountSize || "")} onChangeText={(value) => setNumericField("accountSize", value)} prefix="$" />
-      <FieldRow label="Max Risk Rule" value={String(riskRulePercent(draft))} onChangeText={setMaxRiskRule} suffix="%" />
+      <FieldRow label="Account Size" value={String(draft.accountSize || "")} onChangeText={(value) => setNumericField("accountSize", value)} prefix="$" error={validation.accountSize} />
+      <FieldRow label="Max Risk Rule" value={String(riskRulePercent(draft))} onChangeText={setMaxRiskRule} suffix="%" error={validation.riskRule} />
       <Card style={styles.mathCard}>
         <MetricGrid
           items={[
@@ -860,8 +911,59 @@ function SizeStep({ draft, calculations, validation, setNumericField, setMaxRisk
         />
       </Card>
       <InsightList calculations={calculations} validation={validation} />
-      {error ? <ErrorCard message="Could not generate this check. Try again." /> : null}
-      <PrimaryButton label={loading ? "Reviewing..." : "Review Trade Check"} onPress={onSubmit} disabled={!validation.ready || loading} />
+      <ValidationSummary validation={validation} />
+      {error ? <ErrorCard title="Check failed" message={errorMessage(error)} /> : null}
+      <PrimaryButton label={loading ? "Reviewing..." : "Review Final Details"} onPress={onReview} disabled={!validation.ready || loading} />
+    </View>
+  );
+}
+
+function ReviewTradeStep({ draft, calculations, validation, missingData, onEditContract, onEditSize, onRun, loading, error }) {
+  const tone = calculations.accountRiskPercent <= riskRulePercent(draft) ? "good" : calculations.accountRiskPercent <= riskRulePercent(draft) * 1.5 ? "warn" : "risk";
+  return (
+    <View>
+      <StepTitle title="Final Review" subtitle="Confirm what RiskWise will use before analysis." />
+      <Card style={styles.reviewHeroCard}>
+        <View style={styles.rowBetween}>
+          <View style={styles.flex}>
+            <Text style={styles.bigSymbol}>{draft.ticker || "Ticker missing"}</Text>
+            <Text style={styles.resultName}>{draft.tradeType || tradeTypeFromStructure(draft.structure || draft.optionSide || "call")}</Text>
+          </View>
+          <StatusPill label={draft.expirationSource === "uploaded_screenshot" ? "Uploaded" : "Manual"} tone="neutral" />
+        </View>
+        <View style={styles.reviewFacts}>
+          <KeyValue label="Strike" value={calculations.strike ? `$${calculations.strike.toFixed(2)}` : "Missing"} />
+          <KeyValue label="Expiration" value={displayDate(parseDate(draft.expiration))} />
+          <KeyValue label="Premium" value={calculations.premium ? `$${calculations.premium.toFixed(2)}` : "Missing"} />
+          <KeyValue label="Contracts" value={String(draft.contracts || "Missing")} />
+        </View>
+      </Card>
+      <Card style={styles.mathCard}>
+        <MetricGrid
+          items={[
+            ["Max Loss", formatMoney(calculations.maxLoss), tone],
+            ["Account Risk", `${calculations.accountRiskPercent.toFixed(2)}%`, tone],
+            ["Breakeven", calculations.breakeven ? `$${calculations.breakeven.toFixed(2)}` : "Missing", "neutral"],
+            ["DTE", `${Math.max(calculations.daysToExpiration, 0)} days`, calculations.daysToExpiration < 7 ? "warn" : "neutral"]
+          ]}
+        />
+        <StatusPill
+          label={tone === "good" ? `Within ${riskRulePercent(draft)}% risk rule` : tone === "warn" ? "Near risk limit" : "Above risk limit"}
+          tone={tone}
+        />
+      </Card>
+      <MissingDataCard items={missingData} />
+      <ValidationSummary validation={validation} />
+      {error ? <ErrorCard title="Check failed" message={errorMessage(error)} /> : null}
+      <View style={styles.reviewActions}>
+        <Pressable style={[styles.secondaryButton, styles.reviewAction]} onPress={onEditContract}>
+          <Text style={styles.secondaryButtonText}>Edit Contract</Text>
+        </Pressable>
+        <Pressable style={[styles.secondaryButton, styles.reviewAction]} onPress={onEditSize}>
+          <Text style={styles.secondaryButtonText}>Edit Size</Text>
+        </Pressable>
+      </View>
+      <PrimaryButton label={loading ? "Analyzing..." : "Run Risk Check"} onPress={onRun} disabled={!validation.ready || loading} />
     </View>
   );
 }
@@ -891,26 +993,91 @@ function StrategyStep({ ticker, direction, riskTolerance, horizon, onSelect }) {
   );
 }
 
-function UploadStep({ onUpload }) {
+function UploadStep({ onUpload, extracting, error }) {
+  const uploadActions = [
+    ["camera", "Take Photo", "Use camera", "camera-outline"],
+    ["library", "Photo Library", "Choose saved", "images-outline"],
+    ["files", "Files", "Image, TXT, or CSV", "folder-open-outline"]
+  ];
+  const tips = [
+    ["Full frame", "Include ticker, strike, expiration, premium, and contracts."],
+    ["Readable numbers", "Avoid blur, glare, or dark cropped screenshots."],
+    ["Honest read", "RiskWise only uses fields it can actually see."]
+  ];
+
   return (
     <View>
-      <StepTitle title="Upload Screenshot" subtitle="Upload a screenshot of your options contract." />
-      <Pressable style={styles.uploadBox} onPress={onUpload}>
-        <View style={styles.uploadIcon}>
-          <Ionicons name="camera-outline" size={27} color="#7C3AED" />
+      <StepTitle title="Upload Screenshot" subtitle="Upload a real options contract screenshot. RiskWise will only use fields it can read." />
+      <Pressable style={styles.uploadBox} onPress={() => onUpload("library")} disabled={extracting}>
+        <View style={styles.uploadBoxTop}>
+          <View style={styles.uploadIcon}>
+            <Ionicons name={extracting ? "scan-outline" : "camera-outline"} size={27} color="#7C3AED" />
+          </View>
+          <View style={styles.uploadSignal}>
+            <View style={styles.uploadSignalDot} />
+            <Text style={styles.uploadSignalText}>{extracting ? "Reading" : "No guessing"}</Text>
+          </View>
         </View>
-        <Text style={styles.uploadTitle}>Tap to upload</Text>
-        <Text style={styles.uploadSub}>PNG, JPG - Max 10MB</Text>
+        <View style={styles.uploadPreview}>
+          <View style={styles.previewHeader}>
+            <View style={styles.previewLogo} />
+            <View style={styles.previewLineStrong} />
+          </View>
+          <View style={styles.previewRow}>
+            <View style={styles.previewMetric} />
+            <View style={styles.previewMetricSmall} />
+            <View style={styles.previewMetric} />
+          </View>
+          <View style={styles.scanLine} />
+          <View style={styles.previewFooter}>
+            <View style={styles.previewPill} />
+            <View style={styles.previewPillShort} />
+          </View>
+        </View>
+        <Text style={styles.uploadTitle}>{extracting ? "Reading screenshot..." : "Upload contract screenshot"}</Text>
+        <Text style={styles.uploadSub}>PNG, JPG, TXT, or CSV - Max 1.5MB</Text>
       </Pressable>
-      <Text style={styles.miniLabel}>Supported platforms</Text>
-      <View style={styles.chipRow}>
-        {platforms.map((platform) => <View key={platform} style={styles.platformChip}><Text style={styles.platformText}>{platform}</Text></View>)}
+      <View style={styles.uploadActions}>
+        {uploadActions.map(([source, title, subtitle, icon]) => (
+          <Pressable key={source} style={styles.uploadActionButton} onPress={() => onUpload(source)} disabled={extracting}>
+            <View style={styles.uploadActionIcon}>
+              <Ionicons name={icon} size={16} color={palette.green} />
+            </View>
+            <Text style={styles.uploadActionText}>{title}</Text>
+            <Text style={styles.uploadActionSub}>{subtitle}</Text>
+          </Pressable>
+        ))}
       </View>
-      <Card style={styles.tipCard}>
-        {["Include full contract details", "Make sure strike, expiration, and premium are visible", "Avoid blurry or cropped images"].map((tip) => (
-          <View key={tip} style={styles.tipRow}>
-            <Ionicons name="checkmark-circle-outline" size={15} color={palette.green} />
-            <Text style={styles.tipText}>{tip}</Text>
+      {error ? <ErrorCard title="Extraction failed" message={error} /> : null}
+      <View style={styles.platformHeader}>
+        <Text style={styles.miniLabel}>Supported platforms</Text>
+        <Text style={styles.platformHint}>best-effort parsing</Text>
+      </View>
+      <View style={styles.platformGrid}>
+        {platforms.map((platform) => (
+          <View key={platform} style={styles.platformChip}>
+            <View style={styles.platformDot} />
+            <Text style={styles.platformText}>{platform}</Text>
+          </View>
+        ))}
+      </View>
+      <Card style={styles.uploadTipCard}>
+        <View style={styles.tipHeader}>
+          <View style={styles.tipHeaderIcon}>
+            <Ionicons name="shield-checkmark-outline" size={17} color={palette.green} />
+          </View>
+          <View style={styles.flex}>
+            <Text style={styles.tipHeaderTitle}>Clean screenshot checklist</Text>
+            <Text style={styles.tipHeaderSub}>A clearer upload means fewer manual corrections.</Text>
+          </View>
+        </View>
+        {tips.map(([label, tip]) => (
+          <View key={label} style={styles.uploadTipRow}>
+            <Ionicons name="checkmark-circle" size={17} color={palette.green} />
+            <View style={styles.flex}>
+              <Text style={styles.uploadTipTitle}>{label}</Text>
+              <Text style={styles.uploadTipText}>{tip}</Text>
+            </View>
           </View>
         ))}
       </Card>
@@ -918,55 +1085,86 @@ function UploadStep({ onUpload }) {
   );
 }
 
-function ExtractionStep({ onContinue }) {
+function ExtractionStep({ extracting, extraction, onContinue }) {
+  const missing = extraction?.missing_fields || [];
+  const missingLive = extraction?.missing_live_fields || [];
   return (
     <View>
-      <StepTitle title="Extracting Details..." subtitle="We're reading the screenshot and extracting contract details." />
+      <StepTitle title={extracting ? "Extracting Details..." : "Extraction Complete"} subtitle="We're reading the screenshot and extracting visible contract details." />
       <Card style={styles.extractCard}>
         <View style={styles.progressRing}>
           <Ionicons name="scan-outline" size={28} color="#7C3AED" />
         </View>
-        <Text style={styles.extractTitle}>Extracting...</Text>
-        {["Reading text", "Identifying fields", "Verifying values"].map((item, index) => (
+        <Text style={styles.extractTitle}>{extracting ? "Reading visible fields..." : extraction?.message || "Extraction finished."}</Text>
+        {["Reading image", "Identifying contract fields", "Checking missing values"].map((item, index) => (
           <View key={item} style={styles.tipRow}>
-            <Ionicons name={index < 2 ? "checkmark-circle" : "ellipse-outline"} size={15} color={index < 2 ? palette.green : palette.muted} />
+            <Ionicons name={!extracting || index < 1 ? "checkmark-circle" : "ellipse-outline"} size={15} color={!extracting || index < 1 ? palette.green : palette.muted} />
             <Text style={styles.tipText}>{item}</Text>
           </View>
         ))}
+        {!extracting && extraction ? (
+          <View style={styles.extractionMeta}>
+            <Text style={styles.uploadSub}>Provider: {extraction.provider || "none"} - Confidence: {Math.round((extraction.confidence || 0) * 100)}%</Text>
+            {missing.length ? <Text style={styles.errorText}>Missing required: {missing.map(friendlyMissingField).join(", ")}</Text> : <Text style={styles.successText}>All required fields were found. Still confirm them manually.</Text>}
+            {missingLive.length ? <Text style={styles.helperText}>Missing optional market fields: {missingLive.map(friendlyMissingField).join(", ")}</Text> : null}
+          </View>
+        ) : null}
       </Card>
-      <PrimaryButton label="Review Extracted Details" onPress={onContinue} />
+      <PrimaryButton label="Review Extracted Details" onPress={onContinue} disabled={extracting} />
     </View>
   );
 }
 
-function ExtractedReviewStep({ draft, onEdit, onContinue }) {
+function ExtractedReviewStep({ draft, extraction, status, onEdit, onContinue }) {
+  const requiredMissing = status?.requiredMissing || [];
+  const optionalMissing = status?.optionalMissing || [];
   const rows = [
-    ["Ticker", draft.ticker],
-    ["Strategy", draft.tradeType],
-    ["Expiration", displayDate(parseDate(draft.expiration))],
-    ["Strike Price", `$${Number(draft.strike || 0).toFixed(2)}`],
-    ["Premium", `$${Number(draft.premium || 0).toFixed(2)}`],
-    ["Contracts", draft.contracts],
-    ["Underlying Price", `$${Number(draft.underlyingPrice || 0).toFixed(2)}`]
+    ["Ticker", draft.ticker || "Missing"],
+    ["Strategy", draft.tradeType || "Missing"],
+    ["Expiration", draft.expiration ? displayDate(parseDate(draft.expiration)) : "Missing"],
+    ["Strike Price", draft.strike ? `$${Number(draft.strike || 0).toFixed(2)}` : "Missing"],
+    ["Premium", draft.premium ? `$${Number(draft.premium || 0).toFixed(2)}` : "Missing"],
+    ["Contracts", draft.contracts || "Missing"],
+    ["Underlying Price", draft.underlyingPrice ? `$${Number(draft.underlyingPrice || 0).toFixed(2)}` : "Optional"],
+    ["Bid / Ask", draft.bid || draft.ask ? `${draft.bid || "?"} / ${draft.ask || "?"}` : "Missing"],
+    ["IV", draft.impliedVolatility ? `${draft.impliedVolatility}%` : "Missing"],
+    ["OI / Volume", draft.openInterest || draft.contractVolume ? `${draft.openInterest || "?"} / ${draft.contractVolume || "?"}` : "Missing"]
   ];
   return (
     <View>
-      <StepTitle title="Review Extracted Details" subtitle="Please confirm the extracted details." />
+      <StepTitle title="Review Extracted Details" subtitle="Confirm what the screenshot actually provided." />
       <Card>
         {rows.map(([label, value]) => <KeyValue key={label} label={label} value={value} />)}
       </Card>
+      {requiredMissing.length ? (
+        <Card style={styles.warningCard}>
+          <Text style={styles.warningTitle}>Required fields need manual correction</Text>
+          <Text style={styles.warningText}>RiskWise could not clearly read: {requiredMissing.join(", ")}. Edit these before analysis.</Text>
+        </Card>
+      ) : null}
+      {!requiredMissing.length && optionalMissing.length ? (
+        <Card style={styles.warningCard}>
+          <Text style={styles.warningTitle}>Can continue with partial data</Text>
+          <Text style={styles.warningText}>Missing optional market context: {optionalMissing.join(", ")}. RiskWise will label these as missing and will not invent them.</Text>
+        </Card>
+      ) : null}
+      {!requiredMissing.length && !optionalMissing.length ? (
+        <Card style={styles.successCard}>
+          <Text style={styles.successText}>All core fields were found. Still confirm the numbers before analysis.</Text>
+        </Card>
+      ) : null}
       <Pressable style={styles.secondaryButton} onPress={onEdit}>
         <Text style={styles.secondaryButtonText}>Edit Manually</Text>
       </Pressable>
-      <PrimaryButton label="Confirm & Continue" onPress={onContinue} />
+      <PrimaryButton label={requiredMissing.length ? "Fix Required Fields" : "Confirm & Continue"} onPress={requiredMissing.length ? onEdit : onContinue} />
     </View>
   );
 }
 
-function ConfirmContractStep({ draft, calculations, onContinue }) {
+function ConfirmContractStep({ draft, calculations, validation, missingData, onEdit, onContinue }) {
   return (
     <View>
-      <StepTitle title="Confirm Contract" subtitle="Everything looks good?" />
+      <StepTitle title="Confirm Contract" subtitle="Final check before the AI committee runs." />
       <Card>
         <Text style={styles.bigSymbol}>{draft.ticker}</Text>
         <Text style={styles.resultName}>{draft.tradeType}</Text>
@@ -976,10 +1174,17 @@ function ConfirmContractStep({ draft, calculations, onContinue }) {
         <KeyValue label="Contracts" value={draft.contracts} />
         <KeyValue label="Max Loss" value={formatMoney(calculations.maxLoss)} />
       </Card>
+      <ValidationSummary validation={validation} />
+      <MissingDataCard items={missingData} />
       <Card style={styles.successCard}>
         <Text style={styles.successText}>Looks good. RiskWise will still treat extracted values as user-confirmed, not live market data.</Text>
       </Card>
-      <PrimaryButton label="Continue to Analysis" onPress={onContinue} />
+      {!validation.ready ? (
+        <Pressable style={styles.secondaryButton} onPress={onEdit}>
+          <Text style={styles.secondaryButtonText}>Fix Contract Details</Text>
+        </Pressable>
+      ) : null}
+      <PrimaryButton label="Continue to Analysis" onPress={onContinue} disabled={!validation.ready} />
     </View>
   );
 }
@@ -1001,7 +1206,7 @@ function RunningStep({ progress, onContinue, loading, error, buttonLabel }) {
         </View>
         <Text style={sharedText.microcopy}>{Math.min(progress, 100)}%</Text>
       </Card>
-      {error ? <ErrorCard message="Could not generate this check. Try again." /> : null}
+      {error ? <ErrorCard title="Check failed" message={errorMessage(error)} /> : null}
       {onContinue ? <PrimaryButton label={loading ? "Analyzing..." : buttonLabel} onPress={onContinue} disabled={loading} /> : null}
     </View>
   );
@@ -1211,6 +1416,55 @@ function InsightList({ calculations, validation }) {
   );
 }
 
+function ValidationSummary({ validation }) {
+  if (!validation?.messages?.length) {
+    return null;
+  }
+  return (
+    <Card style={styles.warningCard}>
+      <Text style={styles.warningTitle}>Fix before analysis</Text>
+      {validation.messages.map((message) => (
+        <View key={message} style={styles.tipRow}>
+          <Ionicons name="alert-circle-outline" size={15} color={palette.red} />
+          <Text style={styles.warningText}>{message}</Text>
+        </View>
+      ))}
+    </Card>
+  );
+}
+
+function MissingDataCard({ items = [] }) {
+  if (!items.length) {
+    return (
+      <Card style={styles.successCard}>
+        <Text style={styles.successText}>No optional data warnings from the current inputs.</Text>
+      </Card>
+    );
+  }
+  return (
+    <Card style={styles.missingDataCard}>
+      <View style={styles.rowBetween}>
+        <View style={styles.flex}>
+          <Text style={styles.warningTitle}>Missing data RiskWise will not invent</Text>
+          <Text style={styles.warningText}>These fields can improve confidence, but absent values stay labeled as missing.</Text>
+        </View>
+        <Ionicons name="shield-checkmark-outline" size={20} color={palette.green} />
+      </View>
+      {items.map((item) => (
+        <View key={item.label} style={styles.missingDataRow}>
+          <View style={styles.missingDataIcon}>
+            <Ionicons name="remove-circle-outline" size={14} color="#B7791F" />
+          </View>
+          <View style={styles.flex}>
+            <Text style={styles.missingDataTitle}>{item.label}</Text>
+            <Text style={styles.missingDataText}>{item.detail}</Text>
+          </View>
+        </View>
+      ))}
+    </Card>
+  );
+}
+
 function buildRiskMath(draft) {
   const premium = Number(draft.premium || 0);
   const contracts = Math.max(0, Number(draft.contracts || 0));
@@ -1236,15 +1490,123 @@ function buildRiskMath(draft) {
 
 function validateOptionContract(draft, selectedTicker, calculations) {
   const messages = [];
+  const bidProvided = hasText(draft.bid);
+  const askProvided = hasText(draft.ask);
+  const bid = Number(draft.bid || 0);
+  const ask = Number(draft.ask || 0);
+  const ivProvided = hasText(draft.impliedVolatility);
+  const iv = Number(draft.impliedVolatility || 0);
+  const accountSize = Number(draft.accountSize || 0);
+  const rawRiskRule = accountSize > 0 ? Number(draft.riskBudget || 0) / accountSize * 100 : 0;
   const validation = {
     ticker: selectedTicker?.symbol ? "" : "Select a ticker from search results.",
     strike: calculations.strike > 0 ? "" : "Strike is required.",
     premium: calculations.premium > 0 ? "" : "Premium is required.",
     contracts: calculations.contracts > 0 ? "" : "At least one contract is required.",
-    expiration: parseDate(draft.expiration) && calculations.daysToExpiration >= 0 ? "" : "Choose a future expiration."
+    expiration: parseDate(draft.expiration) && calculations.daysToExpiration >= 0 ? "" : "Choose a future expiration.",
+    bidAsk: bidAskValidationMessage(bidProvided, askProvided, bid, ask),
+    impliedVolatility: ivProvided && (iv <= 0 || iv > 500) ? "IV must be between 0 and 500%, or left blank if unknown." : "",
+    openInterest: hasText(draft.openInterest) && Number(draft.openInterest) < 0 ? "Open interest cannot be negative." : "",
+    contractVolume: hasText(draft.contractVolume) && Number(draft.contractVolume) < 0 ? "Volume cannot be negative." : "",
+    accountSize: accountSize > 0 ? "" : "Account size must be greater than zero.",
+    riskRule: rawRiskRule > 0 && rawRiskRule <= 25 ? "" : "Risk rule must be above 0% and no more than 25%."
   };
   Object.values(validation).forEach((message) => message && messages.push(message));
   return { ...validation, messages, ready: messages.length === 0 };
+}
+
+function bidAskValidationMessage(bidProvided, askProvided, bid, ask) {
+  if (bidProvided && bid <= 0) return "Bid must be greater than zero, or left blank if unknown.";
+  if (askProvided && ask <= 0) return "Ask must be greater than zero, or left blank if unknown.";
+  if (bidProvided && askProvided && bid > ask) return "Bid cannot be greater than ask.";
+  return "";
+}
+
+function buildMissingDataWarnings(draft, market) {
+  const warnings = [];
+  if (!hasText(draft.bid) || !hasText(draft.ask)) {
+    warnings.push({ label: "Bid/ask spread", detail: "Liquidity and realistic fill quality are unknown without both bid and ask." });
+  }
+  if (!hasText(draft.impliedVolatility)) {
+    warnings.push({ label: "Implied volatility", detail: "IV crush and volatility richness cannot be measured from missing IV." });
+  }
+  warnings.push({ label: "Provider Greeks", detail: "Delta, theta, gamma, and vega are not live provider values in this check." });
+  if (!hasText(draft.openInterest)) {
+    warnings.push({ label: "Open interest", detail: "Contract depth is unknown without open interest." });
+  }
+  if (!hasText(draft.contractVolume)) {
+    warnings.push({ label: "Volume", detail: "Today's trading activity is unknown without contract volume." });
+  }
+  if (!hasText(draft.underlyingPrice) && !market?.quote?.price) {
+    warnings.push({ label: "Underlying quote", detail: "Required move uses the best available manual/reference value, not a confirmed live quote." });
+  }
+  if (!market?.earnings?.date) {
+    warnings.push({ label: "Earnings date", detail: "RiskWise will not assume an earnings date when the provider does not attach one." });
+  }
+  if (!hasText(draft.bid) && !hasText(draft.ask)) {
+    warnings.push({ label: "Current option price", detail: "The premium is user-entered or extracted; it is not a live option-chain price." });
+  }
+  return warnings;
+}
+
+function buildExtractionStatus(draft, extraction) {
+  const missingSet = new Set((extraction?.missing_fields || []).map(normalizeMissingField));
+  const missingLiveSet = new Set((extraction?.missing_live_fields || []).map(normalizeMissingField));
+  const requiredChecks = [
+    ["Ticker", ["ticker", "symbol"], draft.ticker],
+    ["Option side", ["option_side", "side", "strategy", "type"], draft.optionSide || draft.structure || draft.tradeType],
+    ["Expiration", ["expiration", "expiry", "expiration_date"], draft.expiration],
+    ["Strike", ["strike", "strike_price"], draft.strike],
+    ["Premium", ["premium", "price", "mid", "mark"], draft.premium],
+    ["Contracts", ["contracts", "quantity", "qty"], draft.contracts]
+  ];
+  const requiredMissing = requiredChecks
+    .filter(([, keys, value]) => !hasText(value) || keys.some((key) => missingSet.has(key)))
+    .map(([label]) => label);
+  const optionalMissing = Array.from(new Set([...missingSet, ...missingLiveSet]))
+    .filter((key) => !requiredChecks.some(([, keys]) => keys.includes(key)))
+    .map(friendlyMissingField)
+    .filter(Boolean);
+  return {
+    requiredMissing: unique(requiredMissing),
+    optionalMissing: unique(optionalMissing)
+  };
+}
+
+function normalizeMissingField(value) {
+  return String(value || "").trim().replace(/([a-z])([A-Z])/g, "$1_$2").replace(/[\s-]+/g, "_").toLowerCase();
+}
+
+function friendlyMissingField(value) {
+  const labels = {
+    bid: "Bid",
+    ask: "Ask",
+    bid_ask: "Bid/ask spread",
+    implied_volatility: "Implied volatility",
+    iv: "Implied volatility",
+    greeks: "Greeks",
+    open_interest: "Open interest",
+    volume: "Volume",
+    contract_volume: "Volume",
+    earnings_date: "Earnings date",
+    current_option_price: "Current option price",
+    underlying_price: "Underlying price"
+  };
+  return labels[value] || value.replace(/_/g, " ");
+}
+
+function hasText(value) {
+  return String(value ?? "").trim().length > 0;
+}
+
+function unique(items) {
+  return Array.from(new Set(items));
+}
+
+function errorMessage(error) {
+  if (!error) return "Could not generate this check. Try again.";
+  if (typeof error === "string") return error;
+  return error.message || "Could not generate this check. Try again.";
 }
 
 function buildLocalResult(report, draft, selectedTicker, calculations) {
@@ -1481,6 +1843,137 @@ function toneColor(tone) {
   return palette.dark;
 }
 
+function pickWebScreenshot(source) {
+  return new Promise((resolve) => {
+    const inputEl = document.createElement("input");
+    inputEl.type = "file";
+    inputEl.accept = source === "files" ? "image/*,.txt,.csv,text/plain,text/csv" : "image/*";
+    if (source === "camera") {
+      inputEl.capture = "environment";
+    }
+    inputEl.onchange = async () => {
+      const file = Array.from(inputEl.files || [])[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      resolve(await readScreenshotFile(file, source));
+    };
+    inputEl.click();
+  });
+}
+
+async function pickNativeScreenshot(source) {
+  if (source === "files") {
+    return pickNativeDocumentAttachment();
+  }
+  const permission =
+    source === "camera"
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+  if (permission.status !== "granted") {
+    throw new Error(`${source === "camera" ? "Camera" : "Photo library"} permission was not granted.`);
+  }
+  const result =
+    source === "camera"
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.75, base64: true })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.75, base64: true });
+  if (result.canceled || !result.assets?.[0]) {
+    return null;
+  }
+  return nativeScreenshotAttachment(result.assets[0], source);
+}
+
+function readScreenshotFile(file, source) {
+  return new Promise((resolve, reject) => {
+    const isText = file.type === "text/plain" || file.type === "text/csv" || /\.(txt|csv)$/i.test(file.name || "");
+    const isImage = file.type?.startsWith("image/");
+    if (!isImage && !isText) {
+      reject(new Error("Upload a PNG/JPG screenshot or a readable TXT/CSV contract export."));
+      return;
+    }
+    if (file.size > 1_500_000) {
+      reject(new Error("Use a file under 1.5MB so RiskWise can process it."));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve({
+        name: file.name || (isText ? "contract.txt" : "contract-screenshot.jpg"),
+        type: file.type || (isText ? "text/plain" : "image/jpeg"),
+        size: file.size || 0,
+        source,
+        ...(isText ? { text: String(reader.result || "") } : { dataUrl: String(reader.result || "") })
+      });
+    };
+    reader.onerror = () => reject(new Error("Could not read that upload."));
+    if (isText) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsDataURL(file);
+    }
+  });
+}
+
+function nativeScreenshotAttachment(asset, source) {
+  const mime = asset.mimeType || "image/jpeg";
+  const extension = mime.includes("png") ? "png" : "jpg";
+  return {
+    name: asset.fileName || `${source}-contract-screenshot.${extension}`,
+    type: mime,
+    size: asset.fileSize || 0,
+    source,
+    uri: asset.uri,
+    dataUrl: asset.base64 ? `data:${mime};base64,${asset.base64}` : ""
+  };
+}
+
+async function pickNativeDocumentAttachment() {
+  const result = await DocumentPicker.getDocumentAsync({
+    type: ["image/*", "text/plain", "text/csv", "application/csv"],
+    copyToCacheDirectory: true
+  });
+  if (result.canceled || !result.assets?.[0]) {
+    return null;
+  }
+  const asset = result.assets[0];
+  const isText = asset.mimeType === "text/plain" || asset.mimeType === "text/csv" || /\.(txt|csv)$/i.test(asset.name || "");
+  const isImage = String(asset.mimeType || "").startsWith("image/");
+  if (!isText && !isImage) {
+    throw new Error("Upload a PNG/JPG screenshot or a readable TXT/CSV contract export.");
+  }
+  if (asset.size && asset.size > 1_500_000) {
+    throw new Error("Use a file under 1.5MB so RiskWise can process it.");
+  }
+  if (isText) {
+    const text = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.UTF8 });
+    return {
+      name: asset.name || "contract.txt",
+      type: asset.mimeType || "text/plain",
+      size: asset.size || text.length,
+      source: "files",
+      text
+    };
+  }
+  const base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: FileSystem.EncodingType.Base64 });
+  const mime = asset.mimeType || "image/jpeg";
+  return {
+    name: asset.name || "contract-screenshot.jpg",
+    type: mime,
+    size: asset.size || 0,
+    source: "files",
+    uri: asset.uri,
+    dataUrl: `data:${mime};base64,${base64}`
+  };
+}
+
+function estimateUploadedRisk(fields, draft) {
+  const premium = Number(fields.premium || draft.premium || 0);
+  const contracts = Number(fields.contracts || draft.contracts || 1);
+  const maxLoss = premium > 0 && contracts > 0 ? premium * contracts * 100 : Number(draft.amountAtRisk || 0);
+  return maxLoss ? String(Math.round(maxLoss * 100) / 100) : draft.amountAtRisk;
+}
+
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
@@ -1602,16 +2095,87 @@ const styles = StyleSheet.create({
   tipCard: { backgroundColor: "#FBFFFC" },
   tipRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginBottom: 7 },
   tipText: { flex: 1, color: palette.dark, fontSize: 11, lineHeight: 16, fontWeight: "800" },
+  warningCard: { backgroundColor: "#FFF8E8", borderColor: "#FADFA2" },
+  warningTitle: { color: palette.dark, fontSize: 12, fontWeight: "900", marginBottom: 6 },
+  warningText: { flex: 1, color: "#6B5A32", fontSize: 10, lineHeight: 15, fontWeight: "800" },
+  missingDataCard: { backgroundColor: "#FFFCF4", borderColor: "#FADFA2" },
+  missingDataRow: { flexDirection: "row", alignItems: "flex-start", gap: 9, paddingTop: 9, marginTop: 8, borderTopWidth: 1, borderTopColor: "#F5E7C5" },
+  missingDataIcon: { width: 24, height: 24, borderRadius: 12, backgroundColor: "#FFF1D6", alignItems: "center", justifyContent: "center" },
+  missingDataTitle: { color: palette.dark, fontSize: 11, fontWeight: "900" },
+  missingDataText: { color: "#6B5A32", fontSize: 9, lineHeight: 13, fontWeight: "800", marginTop: 2 },
+  reviewHeroCard: { backgroundColor: "#FBFFFC", borderColor: "#CFEFD8" },
+  reviewFacts: { marginTop: 10 },
+  reviewActions: { flexDirection: "row", gap: 8, marginTop: 2 },
+  reviewAction: { flex: 1 },
   strategyCard: { padding: 14 },
   strategyName: { color: palette.dark, fontSize: 14, fontWeight: "900" },
   strategyWhy: { color: palette.muted, fontSize: 10, lineHeight: 15, fontWeight: "700", marginTop: 4, maxWidth: 250 },
   strategyFacts: { flexDirection: "row", gap: 12, marginVertical: 12 },
-  uploadBox: { minHeight: 185, borderRadius: 18, borderWidth: 1, borderColor: "#CBB9FF", borderStyle: "dashed", backgroundColor: "#FBF9FF", alignItems: "center", justifyContent: "center", marginBottom: 14 },
-  uploadIcon: { width: 58, height: 58, borderRadius: 29, backgroundColor: "#EFE7FF", alignItems: "center", justifyContent: "center" },
-  uploadTitle: { color: palette.dark, fontSize: 14, fontWeight: "900", marginTop: 12 },
-  uploadSub: { color: palette.muted, fontSize: 10, fontWeight: "800", marginTop: 4 },
-  platformChip: { borderRadius: 999, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: palette.border, paddingHorizontal: 9, paddingVertical: 6 },
+  uploadBox: {
+    minHeight: 220,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: "#D8C7FF",
+    backgroundColor: "#FCFAFF",
+    padding: 14,
+    marginBottom: 12,
+    overflow: "hidden",
+    shadowColor: "#6D28D9",
+    shadowOpacity: 0.13,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 14 }
+  },
+  uploadBoxTop: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
+  uploadIcon: { width: 48, height: 48, borderRadius: 16, backgroundColor: "#F1E9FF", alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E4D7FF" },
+  uploadSignal: { minHeight: 27, borderRadius: 999, paddingHorizontal: 10, flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#ECE6FF" },
+  uploadSignalDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: palette.green },
+  uploadSignalText: { color: palette.dark, fontSize: 9, fontWeight: "900" },
+  uploadPreview: { minHeight: 78, borderRadius: 16, borderWidth: 1, borderColor: "#E6DCFF", backgroundColor: "#FFFFFF", padding: 10, marginBottom: 11 },
+  previewHeader: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 10 },
+  previewLogo: { width: 20, height: 20, borderRadius: 10, backgroundColor: "#E8F8EF" },
+  previewLineStrong: { flex: 1, height: 9, borderRadius: 999, backgroundColor: "#18233B" },
+  previewRow: { flexDirection: "row", gap: 8, marginBottom: 10 },
+  previewMetric: { flex: 1, height: 19, borderRadius: 8, backgroundColor: "#F1F5F9" },
+  previewMetricSmall: { width: 50, height: 19, borderRadius: 8, backgroundColor: "#F1E9FF" },
+  scanLine: { height: 2, borderRadius: 999, backgroundColor: "#8B5CF6", marginBottom: 8 },
+  previewFooter: { flexDirection: "row", gap: 8 },
+  previewPill: { width: 80, height: 9, borderRadius: 999, backgroundColor: "#E8F8EF" },
+  previewPillShort: { width: 54, height: 9, borderRadius: 999, backgroundColor: "#EEF2F7" },
+  uploadTitle: { color: palette.dark, fontSize: 15, fontWeight: "900", textAlign: "center" },
+  uploadSub: { color: palette.muted, fontSize: 9, fontWeight: "800", marginTop: 4, textAlign: "center" },
+  uploadActions: { flexDirection: "row", gap: 8, marginBottom: 12 },
+  uploadActionButton: {
+    flex: 1,
+    minHeight: 73,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: "#DDEBDD",
+    backgroundColor: "#FFFFFF",
+    padding: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#12351B",
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 }
+  },
+  uploadActionIcon: { width: 26, height: 26, borderRadius: 13, backgroundColor: palette.greenSoft, alignItems: "center", justifyContent: "center", marginBottom: 5 },
+  uploadActionText: { color: palette.dark, fontSize: 10, fontWeight: "900", textAlign: "center" },
+  uploadActionSub: { color: palette.muted, fontSize: 8, fontWeight: "800", marginTop: 3, textAlign: "center" },
+  platformHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 7 },
+  platformHint: { color: "#8A63D2", fontSize: 9, fontWeight: "900" },
+  platformGrid: { flexDirection: "row", flexWrap: "wrap", gap: 7, marginBottom: 10 },
+  platformChip: { borderRadius: 999, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#E6E1F5", paddingHorizontal: 9, paddingVertical: 6, flexDirection: "row", alignItems: "center", gap: 6 },
+  platformDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#8B5CF6" },
   platformText: { color: palette.dark, fontSize: 9, fontWeight: "900" },
+  uploadTipCard: { backgroundColor: "#FEFFFE", borderColor: "#D7F0DE", padding: 13 },
+  tipHeader: { flexDirection: "row", alignItems: "center", gap: 9, marginBottom: 9 },
+  tipHeaderIcon: { width: 31, height: 31, borderRadius: 16, backgroundColor: palette.greenSoft, alignItems: "center", justifyContent: "center" },
+  tipHeaderTitle: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  tipHeaderSub: { color: palette.muted, fontSize: 9, lineHeight: 12, fontWeight: "800", marginTop: 2 },
+  uploadTipRow: { flexDirection: "row", alignItems: "flex-start", gap: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: "#EEF5F0" },
+  uploadTipTitle: { color: palette.dark, fontSize: 11, fontWeight: "900" },
+  uploadTipText: { color: palette.muted, fontSize: 9, lineHeight: 12, fontWeight: "800", marginTop: 1 },
   extractCard: { alignItems: "center" },
   progressRing: { width: 82, height: 82, borderRadius: 41, borderWidth: 7, borderColor: "#CBB9FF", alignItems: "center", justifyContent: "center", marginBottom: 12 },
   extractTitle: { color: palette.dark, fontSize: 13, fontWeight: "900", marginBottom: 12 },

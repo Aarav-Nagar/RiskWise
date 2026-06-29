@@ -18,7 +18,8 @@ if (sentryDsn) {
 
 function Root() {
   if (!publishableKey) {
-    throw new Error("Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY in mobile-demo/.env");
+    console.warn("Clerk publishable key is missing. Running RiskWise in unsigned preview mode.");
+    return <App />;
   }
 
   return (

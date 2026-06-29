@@ -3,7 +3,7 @@ import { Image, Linking, Pressable, StyleSheet, Text, TextInput, View } from "re
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
 import { Header, money, ScreenScroll, sharedText } from "../components/Shared";
-import { getMarketBundle, searchMarketSymbols } from "../services/apiClient";
+import { getMarketBundle, getMarketProviderStatus, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
 const stockUniverse = [
@@ -59,6 +59,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
   const [selectedStock, setSelectedStock] = React.useState(startingStock);
   const [marketBundle, setMarketBundle] = React.useState({ quote: null, profile: null, news: null, earnings: null });
   const [marketLoading, setMarketLoading] = React.useState(false);
+  const [providerStatus, setProviderStatus] = React.useState(null);
   const [remoteMatches, setRemoteMatches] = React.useState([]);
   const [savedQuery, setSavedQuery] = React.useState("");
   const [savedFilter, setSavedFilter] = React.useState("All");
@@ -68,6 +69,26 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
   const quote = marketBundle.quote;
   const earnings = marketBundle.earnings?.items || [];
   const filteredSavedChecks = filterSavedChecks(savedChecks, savedQuery, savedFilter);
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadProviderStatus() {
+      try {
+        const status = await getMarketProviderStatus();
+        if (mounted) {
+          setProviderStatus(status);
+        }
+      } catch (error) {
+        if (mounted) {
+          setProviderStatus(null);
+        }
+      }
+    }
+    loadProviderStatus();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     let mounted = true;
@@ -195,6 +216,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
       </Card>
 
       <MarketSnapshot stock={selectedStock} quote={quote} earnings={earnings} loading={marketLoading} />
+      <DataStatusCard status={providerStatus} />
 
       <Card>
         <View style={styles.sectionHeader}>
@@ -255,6 +277,39 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
         </Card>
       ) : null}
     </ScreenScroll>
+  );
+}
+
+function DataStatusCard({ status }) {
+  const providers = Array.isArray(status?.capabilities) ? status.capabilities : [];
+  const active = providers.filter((item) => item.status === "active");
+  const fieldList = status?.data_quality_labels || [];
+  const coreFields = fieldList.length ? fieldList.slice(0, 4) : ["Quote", "News", "Delayed options", "Manual upload"];
+  return (
+    <Card style={styles.dataStatusCard}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.eyebrow}>Data transparency</Text>
+          <Text style={styles.dataStatusTitle}>{active.length ? `${active.length} source${active.length === 1 ? "" : "s"} ready` : "Backend status pending"}</Text>
+        </View>
+        <View style={[styles.dataStatusPill, !active.length && styles.dataStatusPillMuted]}>
+          <Text style={[styles.dataStatusPillText, !active.length && styles.dataStatusPillTextMuted]}>
+            {active.length ? String(status?.strategy || "active").replace(/_/g, " ") : "offline"}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.dataFieldRow}>
+        {coreFields.map((field) => (
+          <View key={field} style={styles.dataFieldChip}>
+            <Ionicons name="checkmark-circle-outline" size={13} color={palette.green} />
+            <Text style={styles.dataFieldText}>{field}</Text>
+          </View>
+        ))}
+      </View>
+      <Text style={styles.dataStatusCopy}>
+        {status?.message || "RiskWise labels delayed, estimated, manual, and missing fields instead of pretending every option field is live."}
+      </Text>
+    </Card>
   );
 }
 
@@ -585,6 +640,66 @@ const styles = StyleSheet.create({
   },
   snapshotCard: {
     backgroundColor: "#FFFFFF"
+  },
+  dataStatusCard: {
+    backgroundColor: "#FBFFFC",
+    borderColor: "#DDF3E3"
+  },
+  dataStatusTitle: {
+    color: palette.dark,
+    fontSize: 16,
+    fontWeight: "900"
+  },
+  dataStatusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: palette.greenSoft,
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    maxWidth: 120
+  },
+  dataStatusPillMuted: {
+    backgroundColor: "#F3F5F3",
+    borderColor: palette.border
+  },
+  dataStatusPillText: {
+    color: palette.green,
+    fontSize: 9,
+    fontWeight: "900",
+    textTransform: "capitalize"
+  },
+  dataStatusPillTextMuted: {
+    color: palette.muted
+  },
+  dataFieldRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    marginTop: 10
+  },
+  dataFieldChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#DDF3E3",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5
+  },
+  dataFieldText: {
+    color: palette.dark,
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  dataStatusCopy: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "800",
+    marginTop: 10
   },
   snapshotHeader: {
     flexDirection: "row",

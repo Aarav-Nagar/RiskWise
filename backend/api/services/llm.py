@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date
 from typing import Any
 
-from api.services.ai_tools import build_ai_tool_context
-from api.services.llm_provider import generate_answer
+from .ai_tools import build_ai_tool_context
+from .llm_provider import configured_providers, generate_answer
 
 
 SAFETY_LINE = "Educational only. Not financial advice."
@@ -50,11 +51,13 @@ async def answer_chat(
     current_report: dict[str, Any] | None = None,
     user_profile: dict[str, Any] | None = None,
     chat_mode: str = "Explain",
+    analysis_depth: str = "standard",
     attachments: list[dict[str, Any]] | None = None,
     conversation_history: list[dict[str, Any]] | None = None,
     recent_checks: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     clean_attachments = sanitize_attachments(attachments or [])
+    attachment_contract = attachment_contract_context(clean_attachments)
     clean_history = compact_history(conversation_history or [])
     clean_recent_checks = compact_saved_checks(recent_checks or [])
     mode = classify_message(message, current_report, chat_mode, clean_attachments, clean_history, clean_recent_checks)
@@ -64,10 +67,20 @@ async def answer_chat(
         current_report=current_report,
         user_profile=user_profile,
         recent_checks=clean_recent_checks,
+        attachment_contract=attachment_contract,
+    )
+    tool_context["context_manifest"] = coach_context_manifest(
+        current_report=current_report,
+        user_profile=user_profile,
+        recent_checks=clean_recent_checks,
+        conversation_history=clean_history,
+        attachments=clean_attachments,
+        tool_context=tool_context,
     )
     response = build_structured_response(
         message,
         mode,
+        analysis_depth,
         current_report,
         user_profile,
         clean_attachments,
@@ -75,12 +88,16 @@ async def answer_chat(
         clean_recent_checks,
     )
     apply_tool_context(response, tool_context)
+    apply_analysis_depth(response, analysis_depth, current_report, tool_context)
+    enforce_response_contract(response)
 
     response["provider"] = "fallback"
     response["model"] = "deterministic-options-coach"
     response["used_fallback"] = True
 
-    if should_use_fast_path(message, mode, current_report, clean_attachments):
+    apply_profile_voice(response, tool_context)
+
+    if should_use_fast_path(message, mode, current_report, clean_attachments) and analysis_depth != "deep_analysis":
         return response
 
     try:
@@ -98,14 +115,20 @@ async def answer_chat(
         llm_result = await generate_answer(system_prompt=SYSTEM_PROMPT, prompt=prompt, attachments=clean_attachments)
         if llm_result and llm_result.text:
             llm_answer = clean_answer(llm_result.text)
-            if not is_low_quality_llm_answer(llm_answer, mode):
+            rejection_reasons = llm_answer_rejection_reasons(llm_answer, response, mode, message, tool_context)
+            if not rejection_reasons:
                 response["answer"] = llm_answer
                 response["provider"] = llm_result.provider
                 response["model"] = llm_result.model
                 response["used_fallback"] = False
+                apply_profile_voice(response, tool_context)
+                enforce_response_contract(response)
+            else:
+                response["llm_rejection_reasons"] = rejection_reasons
     except Exception:
         pass
 
+    apply_profile_voice(response, tool_context)
     return response
 
 
@@ -166,6 +189,10 @@ def build_llm_prompt(
         f"Recent conversation, oldest to newest:\n{history_context}\n\n"
         f"User question:\n{message}\n\n"
         "Return only the assistant answer. Be natural. Keep it mobile-short. Do not repeat prior answers unless the user asks. "
+        "Use RiskWise-specific language: premium, breakeven, DTE, max loss, IV, liquidity, and missing data when those are relevant. "
+        "Avoid textbook openings like 'X is a phenomenon where' or broad definitions that ignore the actual question. "
+        "If profile memory says simple, explain plainly. If it says quant-heavy, include one concrete metric from server facts. "
+        "If it says strict risk, anchor the answer on max loss, invalidation, or missing data. "
         "Do not use markdown bullets, bold, headings, or numbered outlines unless the user explicitly asks for a list."
     )
 
@@ -180,7 +207,22 @@ def classify_message(
 ) -> str:
     lower = message.lower().strip()
     mode_choice = (chat_mode or "Explain").lower()
-    if any(phrase in lower for phrase in ["guarantee me", "safe options trade", "exactly which", "should i buy", "should i sell", "half my account", "all in"]):
+    if any(
+        phrase in lower
+        for phrase in [
+            "guarantee me",
+            "safe options trade",
+            "exactly which",
+            "should i buy",
+            "should i sell",
+            "should i enter",
+            "should i exit",
+            "what should i buy",
+            "what should i sell",
+            "half my account",
+            "all in",
+        ]
+    ):
         return "risk_math"
     if any(phrase in lower for phrase in ["what option did i buy", "what did i buy", "what did i trade last"]):
         return "missing_trade_context"
@@ -284,9 +326,9 @@ def classify_message(
         "spy",
     ]
     has_direct_topic = has_any_term(lower, direct_topic_words)
-    if lower in {"why", "how", "what", "wdym"} or lower.startswith(("what do you mean", "wdym")) or (
+    if not current_report and (lower in {"why", "how", "what", "wdym"} or lower.startswith(("what do you mean", "wdym")) or (
         lower.startswith(("why ", "how ")) and not has_direct_topic
-    ):
+    )):
         return "followup"
     if attachments:
         return "trade_review" if current_report else "attachment_needs_details"
@@ -297,6 +339,10 @@ def classify_message(
     if current_report and has_any_term(lower, ["latest", "check", "report", "trade", "weakest", "risky", "risk", "debate", "setup", "label"]):
         return "trade_review"
     if "bid ask" in lower or "bid-ask" in lower or ("bid" in lower and "ask" in lower):
+        return "concept"
+    if "premium" in lower and any(phrase in lower for phrase in ["go to zero", "worthless", "expire worthless", "why can premium"]):
+        return "concept"
+    if has_any_term(lower, ["spy", "market", "index"]) and has_any_term(lower, ["single stock", "stock calls", "calls"]):
         return "concept"
     if "assignment" in lower:
         return "concept"
@@ -340,7 +386,7 @@ def classify_message(
         return "concept"
     if has_any_term(lower, ["call", "put", "strike", "premium", "expiration", "breakeven", "break-even", "itm", "otm", "atm", "liquidity", "bid", "ask", "option", "options", "event", "events"]):
         return "concept"
-    if has_any_term(lower, ["size", "sizing", "risk", "max loss", "drawdown", "budget", "loss", "capital"]):
+    if has_any_term(lower, ["size", "sizing", "max loss", "drawdown", "budget", "loss", "capital", "account risk", "risk percent"]):
         return "risk_math"
     if has_any_term(lower, ["what can you do", "who are you", "help"]):
         return "greeting"
@@ -352,6 +398,7 @@ def classify_message(
 def build_structured_response(
     message: str,
     mode: str,
+    analysis_depth: str,
     current_report: dict[str, Any] | None,
     user_profile: dict[str, Any] | None,
     attachments: list[dict[str, Any]],
@@ -371,17 +418,17 @@ def build_structured_response(
     elif mode == "missing_trade_context":
         answer, cards, blocks = missing_trade_context_response()
     elif mode == "saved_trade_lookup":
-        answer, cards, blocks = saved_trade_lookup_response(recent_checks)
+        answer, cards, blocks = saved_trade_lookup_response(message, recent_checks)
     elif mode == "trade_identity" and current_report:
         answer, cards, blocks = trade_identity_response(current_report)
     elif mode == "attachment_needs_details":
-        answer, cards, blocks = attachment_needs_details_response(attachments)
+        answer, cards, blocks = attachment_needs_details_response(message, attachments)
     elif mode == "simplify":
         answer, cards, blocks = simplify_response(message, conversation_history)
     elif mode == "followup":
         answer, cards, blocks = followup_response(message, conversation_history)
     elif mode == "trade_review" and current_report:
-        answer, cards, blocks = report_review_response(current_report, attachments)
+        answer, cards, blocks = report_review_response(message, current_report, attachments)
     elif mode == "risk_math":
         answer, cards, blocks = risk_math_response(message, user_profile, attachments)
     elif mode == "strategy_explainer":
@@ -410,6 +457,7 @@ def build_structured_response(
 
     return {
         "answer": clean_answer(answer),
+        "analysis_depth": analysis_depth,
         "mode": mode,
         "summary_cards": cards,
         "visual_blocks": blocks,
@@ -422,8 +470,26 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
     response["missing_data"] = tool_context.get("missing_data", [])
     response["risk_flags"] = tool_context.get("risk_flags", [])
     response["tools_used"] = tool_context.get("tools_used", [])
-
     tool_results = tool_context.get("tool_results") or []
+    response["normalized_context"] = {
+        "ticker": tool_context.get("ticker"),
+        "missing_data": tool_context.get("missing_data", []),
+        "risk_flags": tool_context.get("risk_flags", []),
+        "tools_used": tool_context.get("tools_used", []),
+        "coach_context": tool_context.get("coach_context") or {},
+        "data_quality": normalized_data_quality(tool_results),
+        "selected_contract": normalized_selected_contract(tool_results),
+        "selected_trade": normalized_selected_trade(tool_results),
+        "uploaded_contract": normalized_uploaded_contract(tool_results),
+        "profile_memory": normalized_profile_memory(tool_results),
+        "saved_check_matches": normalized_saved_check_matches(tool_results),
+        "fact_tools": normalized_fact_tools(tool_results),
+        "missing_categories": normalized_missing_categories(tool_results),
+        "context_manifest": tool_context.get("context_manifest") or {},
+    }
+    response["what_used"] = human_tool_names(response["tools_used"])
+    response["provider_status"] = {"providers": configured_providers(), "fallback_available": True}
+
     tool_rows: list[list[str]] = []
     for item in tool_results:
         name = item.get("name")
@@ -522,6 +588,80 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
         elif name == "get_saved_trade" and result.get("status") == "ok":
             report = result.get("report") or {}
             tool_rows.append(["Saved check", report_title(report)])
+        elif name == "parse_uploaded_contract":
+            fields = result.get("fields") or {}
+            status = str(result.get("status") or "unknown")
+            ticker = fields.get("ticker") or "Unknown"
+            missing_fields = [str(item).replace("_", " ") for item in result.get("missing_fields") or []]
+            if fields:
+                response["summary_cards"].append({"label": "Upload parsed", "value": str(ticker).upper(), "tone": "good"})
+            elif result.get("attachments"):
+                response["summary_cards"].append({"label": "Upload parsed", "value": "Needs review", "tone": "warn"})
+            tool_rows.append(["Uploaded contract", f"{status}; missing {', '.join(missing_fields[:3]) or 'none flagged'}"])
+            if fields:
+                response["visual_blocks"].append(
+                    {
+                        "type": "mini_table",
+                        "title": "Uploaded contract parsed",
+                        "rows": [
+                            ["Ticker", str(fields.get("ticker") or "Missing")],
+                            ["Side", str(fields.get("optionSide") or fields.get("tradeType") or "Missing")],
+                            ["Strike", dollars(fields.get("strike")) if fields.get("strike") is not None else "Missing"],
+                            ["Expiration", str(fields.get("expiration") or "Missing")],
+                            ["Premium", exact_dollars(fields.get("premium")) if fields.get("premium") is not None else "Missing"],
+                            ["Contracts", str(fields.get("contracts") or "Missing")],
+                        ],
+                    }
+                )
+        elif name == "retrieve_saved_checks" and result.get("status") == "ok":
+            matches = result.get("matches") or []
+            if matches:
+                response["summary_cards"].append({"label": "Memory", "value": f"{len(matches)} checks", "tone": "neutral"})
+                tool_rows.append(["Relevant checks", ", ".join(str(item.get("title") or item.get("ticker") or "check") for item in matches[:2])])
+        elif name == "retrieve_profile_memory" and result.get("status") == "ok":
+            style = result.get("preferred_explanation") or "Step-by-step"
+            strictness = result.get("risk_strictness") or result.get("risk_style") or "Balanced"
+            response["summary_cards"].append({"label": "Style", "value": str(style), "tone": "neutral"})
+            tool_rows.append(["Profile memory", f"{style}; {strictness} risk lens"])
+            response["visual_blocks"].append(
+                {
+                    "type": "mini_table",
+                    "title": "AI memory used",
+                    "rows": [
+                        ["Experience", str(result.get("experience_level") or "Not set")],
+                        ["Risk style", str(result.get("risk_style") or "Balanced")],
+                        ["Explanation", str(style)],
+                        ["Strictness", str(strictness)],
+                    ],
+                }
+            )
+        elif name == "calculate_dte":
+            dte = result.get("calendar_days_left") or result.get("trading_days_left")
+            if dte is not None:
+                response["summary_cards"].append({"label": "DTE", "value": f"{dte}d", "tone": "neutral"})
+                tool_rows.append(["DTE", f"{dte} days via backend risk math"])
+        elif name == "calculate_liquidity_score":
+            score = result.get("score")
+            if score is not None:
+                label = str(result.get("label") or "estimated")
+                response["summary_cards"].append({"label": "Liquidity", "value": f"{score}/100", "tone": "warn" if int(score) < 65 else "good"})
+                detail = f"{score}/100 {label}; missing {', '.join(result.get('missing') or []) or 'none'}"
+                if result.get("spread_width_pct") is not None:
+                    detail += f"; spread {result['spread_width_pct']}%"
+                tool_rows.append(["Liquidity score", detail])
+        elif name == "retrieve_selected_trade" and result.get("status") == "ok":
+            pressures = ", ".join(result.get("pressure_points") or []) or result.get("title") or "selected check"
+            tool_rows.append(["Selected trade", pressures])
+        elif name == "detect_missing_data":
+            categories = result.get("categories") or {}
+            if categories:
+                response["visual_blocks"].append(
+                    {
+                        "type": "mini_table",
+                        "title": "Missing-data detector",
+                        "rows": [[label.replace("_", " ").title(), ", ".join(values[:4])] for label, values in categories.items()],
+                    }
+                )
         elif name == "search_ticker" and result.get("items"):
             matches = result.get("items") or []
             response["summary_cards"].append({"label": "Ticker matches", "value": str(len(matches)), "tone": "good"})
@@ -575,15 +715,463 @@ def apply_tool_context(response: dict[str, Any], tool_context: dict[str, Any]) -
                 "rows": [[item, "Needed for a sharper answer"] for item in missing[:5]],
             }
         )
+    manifest = tool_context.get("context_manifest") or {}
+    if manifest:
+        response["visual_blocks"].append(
+            {
+                "type": "mini_table",
+                "title": "Coach context available",
+                "rows": context_manifest_rows(manifest),
+            }
+        )
 
 
-def report_review_response(current_report: dict[str, Any], attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+def normalized_data_quality(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    ready: set[str] = set()
+    missing: set[str] = set()
+    providers: set[str] = set()
+    for item in tool_results:
+        result = item.get("result") or {}
+        provider = result.get("provider")
+        if provider:
+            providers.add(str(provider))
+        for field in result.get("fields_ready") or []:
+            ready.add(str(field).replace("_", " "))
+        for field in result.get("fields_pending") or result.get("missing") or []:
+            missing.add(str(field).replace("_", " "))
+    label = "partial" if missing else "ready" if ready else "unknown"
+    return {"label": label, "ready": sorted(ready), "missing": sorted(missing), "providers": sorted(providers)}
+
+
+def coach_context_manifest(
+    *,
+    current_report: dict[str, Any] | None,
+    user_profile: dict[str, Any] | None,
+    recent_checks: list[dict[str, Any]],
+    conversation_history: list[dict[str, Any]],
+    attachments: list[dict[str, Any]],
+    tool_context: dict[str, Any],
+) -> dict[str, Any]:
+    tool_results = tool_context.get("tool_results") or []
+    data_quality = normalized_data_quality(tool_results)
+    uploaded = normalized_uploaded_contract(tool_results)
+    coach_context = tool_context.get("coach_context") or {}
+    availability = coach_context.get("availability") or {}
+    missing_categories = coach_context.get("missing_categories") or {}
+    return {
+        "selected_check": bool(current_report),
+        "saved_checks": len(recent_checks),
+        "profile_memory": bool(user_profile),
+        "recent_chat_messages": len(conversation_history),
+        "uploaded_contract": bool(uploaded.get("fields")),
+        "attachments": len(attachments),
+        "primary_source": coach_context.get("primary_source") or ("selected_check" if current_report else "question_only"),
+        "tool_count": availability.get("tool_count") or len(tool_results),
+        "market_data_status": data_quality.get("label") or "unknown",
+        "missing_data": len(tool_context.get("missing_data") or []),
+        "missing_categories": missing_categories,
+        "guardrails": coach_context.get("guardrails") or [],
+        "answer_guidance": coach_context.get("answer_guidance") or [],
+    }
+
+
+def context_manifest_rows(manifest: dict[str, Any]) -> list[list[str]]:
+    rows = [
+        ["Primary source", str(manifest.get("primary_source") or "question_only")],
+        ["Selected check", "Available" if manifest.get("selected_check") else "Not selected"],
+        ["Saved checks", str(manifest.get("saved_checks") or 0)],
+        ["Profile memory", "Available" if manifest.get("profile_memory") else "Not set"],
+        ["Recent chat", f"{manifest.get('recent_chat_messages') or 0} messages"],
+        ["Uploaded contract", "Parsed" if manifest.get("uploaded_contract") else "None parsed"],
+        ["Market data", str(manifest.get("market_data_status") or "unknown")],
+        ["Missing data", str(manifest.get("missing_data") or 0)],
+        ["Tools", str(manifest.get("tool_count") or 0)],
+    ]
+    guidance = manifest.get("answer_guidance") or []
+    if guidance:
+        rows.append(["Coach guidance", str(guidance[0])[:90]])
+    return rows
+
+
+def normalized_selected_trade(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in tool_results:
+        if item.get("name") == "retrieve_selected_trade":
+            result = item.get("result") or {}
+            return {
+                "status": result.get("status"),
+                "source": result.get("source"),
+                "title": result.get("title"),
+                "pressure_points": result.get("pressure_points") or [],
+                "missing_data": result.get("missing_data") or [],
+                "data_quality": result.get("data_quality") or {},
+                "report": result.get("report") or {},
+            }
+    return {}
+
+
+def normalized_selected_contract(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in tool_results:
+        if item.get("name") == "get_option_contract":
+            result = item.get("result") or {}
+            selected = result.get("selected") or {}
+            return {
+                "ticker": result.get("ticker") or selected.get("symbol"),
+                "contract_symbol": selected.get("contract_symbol") or selected.get("ticker"),
+                "expiration": selected.get("expiration") or selected.get("expiration_date"),
+                "strike": selected.get("strike") or selected.get("strike_price"),
+                "option_side": selected.get("optionSide") or selected.get("contract_type"),
+                "moneyness": selected.get("moneynessLabel"),
+                "status": result.get("status"),
+            }
+    return {}
+
+
+def normalized_uploaded_contract(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in tool_results:
+        if item.get("name") == "parse_uploaded_contract":
+            result = item.get("result") or {}
+            return {
+                "status": result.get("status"),
+                "fields": result.get("fields") or {},
+                "missing_fields": result.get("missing_fields") or [],
+                "confidence": result.get("confidence"),
+                "provider": result.get("provider"),
+            }
+    return {}
+
+
+def normalized_profile_memory(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in tool_results:
+        if item.get("name") == "retrieve_profile_memory":
+            result = item.get("result") or {}
+            return {
+                "experience_level": result.get("experience_level"),
+                "risk_style": result.get("risk_style"),
+                "preferred_explanation": result.get("preferred_explanation"),
+                "question_style": result.get("question_style"),
+                "risk_strictness": result.get("risk_strictness"),
+                "risk_rules": result.get("risk_rules") or {},
+                "common_mistakes": result.get("common_mistakes") or [],
+            }
+    return {}
+
+
+def normalized_saved_check_matches(tool_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for item in tool_results:
+        if item.get("name") == "retrieve_saved_checks":
+            result = item.get("result") or {}
+            return (result.get("matches") or [])[:5]
+    return []
+
+
+def normalized_fact_tools(tool_results: list[dict[str, Any]]) -> dict[str, Any]:
+    facts: dict[str, Any] = {}
+    names = {
+        "calculate_max_loss": "max_loss",
+        "calculate_breakeven": "breakeven",
+        "calculate_dte": "dte",
+        "calculate_liquidity_score": "liquidity",
+    }
+    for item in tool_results:
+        name = item.get("name")
+        if name in names:
+            facts[names[name]] = item.get("result") or {}
+    return facts
+
+
+def normalized_missing_categories(tool_results: list[dict[str, Any]]) -> dict[str, list[str]]:
+    for item in tool_results:
+        if item.get("name") == "detect_missing_data":
+            result = item.get("result") or {}
+            return result.get("categories") or {}
+    return {}
+
+
+def human_tool_names(tools_used: list[dict[str, Any]]) -> list[str]:
+    labels = {
+        "get_quote": "stock quote",
+        "get_company_profile": "company profile",
+        "get_earnings": "earnings calendar",
+        "get_news": "news context",
+        "get_options_context": "options data status",
+        "get_option_chain": "option chain/reference",
+        "get_option_contract": "selected contract",
+        "calculate_max_loss": "max loss math",
+        "calculate_breakeven": "breakeven math",
+        "calculate_dte": "DTE math",
+        "calculate_liquidity_score": "liquidity score",
+        "retrieve_selected_trade": "selected-trade retriever",
+        "detect_missing_data": "missing-data detector",
+        "retrieve_saved_checks": "relevant saved checks",
+        "retrieve_profile_memory": "profile memory",
+        "get_saved_trade": "saved trade",
+        "get_current_report": "selected check",
+        "parse_uploaded_contract": "uploaded contract parser",
+        "search_ticker": "ticker search",
+    }
+    result: list[str] = []
+    for tool in tools_used:
+        name = tool.get("name")
+        label = labels.get(name, name)
+        if label and label not in result:
+            result.append(str(label))
+    return result
+
+
+def enforce_response_contract(response: dict[str, Any]) -> None:
+    defaults: dict[str, Any] = {
+        "answer": "",
+        "analysis_depth": "standard",
+        "mode": "fallback",
+        "summary_cards": [],
+        "visual_blocks": [],
+        "suggested_prompts": [],
+        "confidence": 0.6,
+        "missing_data": [],
+        "risk_flags": [],
+        "tools_used": [],
+        "what_used": [],
+        "agent_docket": [],
+        "normalized_context": {},
+        "provider_status": {"providers": configured_providers(), "fallback_available": True},
+        "llm_rejection_reasons": [],
+    }
+    for key, value in defaults.items():
+        if key not in response or response[key] is None:
+            response[key] = value
+    response["answer"] = clean_answer(str(response.get("answer") or "I can help once I have a ticker, contract, or options question."))
+
+
+def apply_analysis_depth(
+    response: dict[str, Any],
+    analysis_depth: str,
+    current_report: dict[str, Any] | None,
+    tool_context: dict[str, Any],
+) -> None:
+    if analysis_depth != "deep_analysis":
+        return
+    docket = committee_docket(current_report, tool_context)
+    score = committee_score(docket)
+    response["agent_docket"] = docket
+    response["summary_cards"].append(
+        {
+            "label": "Committee",
+            "value": f"{score}/100",
+            "tone": "good" if score >= 75 else "warn",
+        }
+    )
+    response["visual_blocks"].append({"type": "agent_committee", "title": "Risk committee", "agents": docket})
+    top_risks = [str(item.get("weakest_evidence") or item.get("finding") or "") for item in docket if item.get("stance") != "supportive"][:3]
+    response["risk_flags"] = sorted(set([*response.get("risk_flags", []), *[item for item in top_risks if item]]))
+    response["visual_blocks"].append(
+        {
+            "type": "mini_table",
+            "title": "Committee synthesis",
+            "rows": [
+                ["Committee score", f"{score}/100"],
+                ["Strongest evidence", best_agent_finding(docket)],
+                ["Weakest evidence", worst_agent_finding(docket)],
+                ["Next question", best_next_question(docket)],
+            ],
+        }
+    )
+    missing = tool_context.get("missing_data", [])
+    what_used = response.get("what_used") or human_tool_names(tool_context.get("tool_results") or [])
+    response["visual_blocks"].append(
+        {
+            "type": "mini_table",
+            "title": "Risk map",
+            "rows": [
+                ["Thesis", report_title(current_report) if current_report else "No selected check"],
+                ["Max loss", dollars((current_report or {}).get("amountAtRisk") or ((current_report or {}).get("riskMath") or {}).get("max_loss")) if current_report else "Unknown"],
+                ["Liquidity warning", "Missing bid/ask, volume, or open interest" if any(term in " ".join(map(str, missing)).lower() for term in ["bid", "ask", "volume", "open interest"]) else "No missing liquidity fields flagged"],
+                ["Data honesty", ", ".join(missing[:4]) or "No missing fields flagged"],
+            ],
+        }
+    )
+    response["visual_blocks"].append(
+        {
+            "type": "mini_table",
+            "title": "Scenario table",
+            "rows": [
+                ["Works if", best_agent_finding(docket)],
+                ["Breaks if", worst_agent_finding(docket)],
+                ["Before trusting", best_next_question(docket)],
+            ],
+        }
+    )
+    response["visual_blocks"].append(
+        {
+            "type": "mini_table",
+            "title": "Beginner explanation",
+            "rows": [
+                ["Plain read", "The contract must beat premium, time decay, and missing data before the upside story matters."],
+                ["Final verdict", "Cautious until the weakest evidence and missing live fields are confirmed."],
+            ],
+        }
+    )
+    if top_risks:
+        response["visual_blocks"].append(
+            {
+                "type": "mini_table",
+                "title": "Top risks",
+                "rows": [[str(index + 1), risk] for index, risk in enumerate(top_risks)],
+            }
+        )
+    response["visual_blocks"].append(
+        {
+            "type": "mini_table",
+            "title": "What RiskWise used",
+            "rows": [
+                ["Inputs", ", ".join(what_used[:5]) or "Selected check context"],
+                ["Missing live data", ", ".join([str(item) for item in missing[:6]]) or "No missing fields flagged"],
+                ["Guardrail", "Backend math is used for max loss, breakeven, DTE, and data quality."],
+            ],
+        }
+    )
+    top_risk_text = "; ".join(top_risks[:2]) if top_risks else "no extra committee risks were flagged"
+    missing_text = ", ".join([str(item) for item in missing[:4]]) or "no missing fields were flagged"
+    used_text = ", ".join(what_used[:4]) or "the selected check context"
+    if current_report:
+        response["answer"] = clean_answer(
+            f"Deep analysis is ready. The committee score is {score}/100. "
+            f"The strongest point is {best_agent_finding(docket)}, while the biggest open issue is {worst_agent_finding(docket)}. "
+            f"Top risks: {top_risk_text}. Missing data: {missing_text}. "
+            f"What RiskWise used: {used_text}. Final verdict: cautious until the missing data and weakest link are confirmed."
+        )
+    else:
+        response["answer"] = clean_answer(
+            "Deep analysis needs a selected check, uploaded contract, or ticker/strike/expiration/premium context. "
+            "I can still map what is missing, but I should not pretend there is a complete trade yet."
+        )
+
+
+def committee_docket(current_report: dict[str, Any] | None, tool_context: dict[str, Any]) -> list[dict[str, Any]]:
+    report = current_report or {}
+    risk_math = report.get("riskMath") or report.get("risk_math") or {}
+    missing = tool_context.get("missing_data", [])
+    normalized = {
+        (item.get("name"), item.get("result", {}).get("status"))
+        for item in (tool_context.get("tool_results") or [])
+    }
+    has_contract_context = any(name == "get_option_contract" for name, _ in normalized)
+    has_chain_context = any(name == "get_option_chain" for name, _ in normalized)
+    setup = int(report.get("setupScore") or report.get("setup_score") or 62)
+    risk_pct = number_from_any(risk_math.get("account_risk_pct") or risk_math.get("risk_percent"))
+    max_loss = risk_math.get("max_loss") or report.get("amountAtRisk") or report.get("amount_at_risk")
+    required_move = risk_math.get("required_move_to_breakeven_pct")
+    dte = risk_math.get("calendar_days_left") or risk_math.get("trading_days_left")
+    weakest = str(report.get("weakestLink") or report.get("weakest_link") or "").lower()
+    return [
+        agent_row(
+            "Structure Agent",
+            clamp_score(setup + (8 if has_contract_context else 0) + (4 if required_move is not None else -10)),
+            "supportive" if setup >= 75 else "cautious",
+            f"Breakeven move is {required_move}% and DTE is {dte or 'unknown'}." if required_move is not None else "Breakeven move is not fully known.",
+            "Strike, expiration, and payoff shape are available." if report else "No selected contract structure yet.",
+            "Required move, premium, or exact moneyness is missing." if required_move is None else "Directional thesis still needs confirmation.",
+            missing,
+            "What exact condition invalidates the setup?",
+        ),
+        agent_row(
+            "Volatility Agent",
+            48 if any("iv" in str(item).lower() or "volatility" in str(item).lower() for item in missing) else 72,
+            "weak" if any("iv" in str(item).lower() or "volatility" in str(item).lower() for item in missing) else "cautious",
+            "IV, event timing, and volatility crush decide whether the premium is inflated.",
+            "Event context is checked when provider data exists; no volatility claim is made without IV.",
+            "Provider-reported IV or event premium is missing.",
+            missing,
+            "Is this before earnings or another volatility event?",
+        ),
+        agent_row(
+            "Liquidity Agent",
+            46 if any(term in " ".join(map(str, missing)).lower() for term in ["bid", "ask", "volume", "open interest"]) else 74,
+            "weak" if missing else "cautious",
+            "Fill quality depends on bid/ask width and participation.",
+            "Contract reference data can be attached when available." if has_chain_context else "No option-chain depth is confirmed yet.",
+            "Bid/ask, volume, or open interest is missing.",
+            missing,
+            "What is the bid, ask, volume, and open interest?",
+        ),
+        agent_row(
+            "Sizing Agent",
+            82 if risk_pct is not None and risk_pct <= 2 else 58 if risk_pct is None else 45,
+            "supportive" if risk_pct is not None and risk_pct <= 2 else "cautious",
+            f"Max loss is {dollars(max_loss)}." if max_loss is not None else "Max loss needs premium and contract count.",
+            "Risk is inside the common 1-2% guardrail." if risk_pct is not None and risk_pct <= 2 else "Sizing needs a stricter guardrail.",
+            "Account-risk percent is high or unknown.",
+            missing,
+            "What maximum account percent are you willing to lose?",
+        ),
+        agent_row(
+            "Skeptic Agent",
+            50 if missing or weakest else 70,
+            "cautious" if not weakest else "weak",
+            f"The named weak point is {weakest}." if weakest else "The thesis should survive missing-data checks before confidence rises.",
+            "RiskWise can name the exact fields needed instead of guessing.",
+            "Missing data can make a decent-looking setup misleading.",
+            missing,
+            "What evidence would prove this trade thesis wrong?",
+        ),
+    ]
+
+
+def agent_row(agent: str, score: int, stance: str, finding: str, strongest: str, weakest: str, missing: list[str], question: str) -> dict[str, Any]:
+    return {
+        "agent": agent,
+        "score": score,
+        "stance": stance,
+        "finding": finding,
+        "strongest_evidence": strongest,
+        "weakest_evidence": weakest,
+        "missing_data": missing[:5],
+        "next_question": question,
+    }
+
+
+def committee_score(docket: list[dict[str, Any]]) -> int:
+    return round(sum(int(item.get("score") or 0) for item in docket) / max(1, len(docket)))
+
+
+def best_agent_finding(docket: list[dict[str, Any]]) -> str:
+    best = max(docket, key=lambda item: int(item.get("score") or 0))
+    return str(best.get("strongest_evidence") or best.get("finding") or "the defined risk math")
+
+
+def worst_agent_finding(docket: list[dict[str, Any]]) -> str:
+    worst = min(docket, key=lambda item: int(item.get("score") or 0))
+    return str(worst.get("weakest_evidence") or worst.get("finding") or "the missing contract data")
+
+
+def best_next_question(docket: list[dict[str, Any]]) -> str:
+    worst = min(docket, key=lambda item: int(item.get("score") or 0))
+    return str(worst.get("next_question") or "What data would change this read?")
+
+
+def clamp_score(value: int | float) -> int:
+    return max(0, min(100, round(value)))
+
+
+def number_from_any(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def report_review_response(message: str, current_report: dict[str, Any], attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    lower = message.lower()
+    title = report_title(current_report)
     risk_math = current_report.get("riskMath") or current_report.get("risk_math") or {}
     debate = current_report.get("setupDebate") or current_report.get("setup_debate") or {}
     weakest = current_report.get("weakestLink") or current_report.get("weakest_link") or "position sizing"
     posture = current_report.get("riskPosture") or current_report.get("risk_posture") or "mixed"
     setup_score = int(current_report.get("setupScore") or current_report.get("setup_score") or 60)
     required_move = risk_math.get("required_move_to_breakeven_pct")
+    dte = risk_math.get("calendar_days_left") or risk_math.get("trading_days_left") or risk_math.get("days_to_expiration")
+    account_risk_pct = risk_math.get("account_risk_pct") or risk_math.get("risk_percent_of_account")
     amount_at_risk = (
         risk_math.get("max_loss")
         or current_report.get("amountAtRisk")
@@ -593,11 +1181,58 @@ def report_review_response(current_report: dict[str, Any], attachments: list[dic
     )
     max_loss = dollars(amount_at_risk)
     attachment_note = " I also see an attachment, so I would cross-check the visible contract details against the report." if attachments else ""
-    answer = (
-        f"This looks like a {posture.lower()} risk review. The weak point is {weakest}, and the max loss shown is {max_loss}. "
-        f"The setup score matters less than whether the required move, time left, and premium risk all fit your account plan.{attachment_note}\n\n"
-        "A good next question is not 'is this right?' but 'what has to go right for this contract to work, and what breaks the thesis first?'"
-    )
+    missing_fields = report_missing_contract_fields(current_report)
+    if has_any_term(lower, ["missing data", "what data", "need before", "before trusting", "missing"]):
+        visible_missing = ", ".join(missing_fields[:6]) or "no obvious report fields"
+        answer = (
+            f"For {title}, the missing pieces before trusting the read are {visible_missing}. "
+            "Those fields matter because they decide whether the premium, fill quality, volatility risk, and participation are real or just assumed. "
+            f"RiskWise can still use the selected check, max loss {max_loss}, and weakest link {weakest}, but it should not pretend the live contract snapshot is complete."
+        )
+    elif has_any_term(lower, ["weakest", "weak link", "weak point", str(weakest).lower()]):
+        answer = (
+            f"The weakest link is {weakest}. In plain English: the trade can be directionally right and still disappoint if the stock does not move enough, fast enough, to beat what you paid. "
+            f"For {title}, the report shows max loss {max_loss}"
+            f"{f', required move {required_move}%' if required_move is not None else ''}"
+            f"{f', and {dte} days left' if dte is not None else ''}. "
+            "That is the pressure point to understand before trusting the setup."
+        )
+    elif has_any_term(lower, ["debate", "bull", "bear", "argue", "case for", "case against"]):
+        answer = (
+            f"For {title}, the bull case is {debate.get('bull_case') or 'the directional thesis can work if price, time, and premium line up'}. "
+            f"The bear case is {debate.get('bear_case') or 'time decay, IV change, and missing contract data can overwhelm the idea'}. "
+            f"The risk judge view: {debate.get('risk_judge') or 'risk budget and missing data should control confidence'}. "
+            f"The weak link is {weakest}, with max loss {max_loss}"
+            f"{f' and {dte} days left' if dte is not None else ''}."
+        )
+    elif has_any_term(lower, ["position size", "position sizing", "size", "sizing", "too big", "account risk"]):
+        answer = (
+            f"For {title}, position size starts with max loss {max_loss}"
+            f"{f', which is {float(account_risk_pct):g}% of the account' if account_risk_pct is not None else ''}. "
+            f"The weak point is {weakest}. If that max loss is above the profile risk budget, the trade is too large before the upside story matters. "
+            "The next check is whether the premium can go to zero without damaging the account plan."
+        )
+    elif has_any_term(lower, ["what has to go right", "has to go right", "needs to happen", "need to happen", "work"]):
+        answer = (
+            f"For {title} to work, the stock has to move enough and soon enough to beat the premium paid"
+            f"{f', roughly a {required_move}% move to breakeven' if required_move is not None else ''}"
+            f"{f' within {dte} days' if dte is not None else ''}. "
+            f"The weak link is {weakest}, and missing live contract data such as bid/ask, IV, Greeks, volume, or open interest can still change the read."
+        )
+    elif has_any_term(lower, ["why", "risky", "risk", "what can go wrong", "what can break", "break this", "breaks this", "invalidate", "fail", "danger"]):
+        answer = (
+            f"For {title}, this is risky mainly because the weak point is {weakest}. The selected check shows max loss {max_loss}"
+            f"{f', a {required_move}% required move to breakeven' if required_move is not None else ''}"
+            f"{f', {dte} days left' if dte is not None else ''}"
+            f"{f', and {float(account_risk_pct):g}% account risk' if account_risk_pct is not None else ''}. "
+            "That means direction alone is not enough; timing, premium paid, and missing liquidity/IV data can all break the setup."
+        )
+    else:
+        answer = (
+            f"{title} looks like a {posture.lower()} risk review. The weak point is {weakest}, and the max loss shown is {max_loss}. "
+            f"The setup score matters less than whether the required move, time left, and premium risk all fit your account plan.{attachment_note}\n\n"
+            "A good next question is not 'is this right?' but 'what has to go right for this contract to work, and what breaks the thesis first?'"
+        )
     cards = [
         {"label": "Weakest link", "value": str(weakest), "tone": "warn"},
         {"label": "Max loss", "value": max_loss, "tone": "risk"},
@@ -612,10 +1247,34 @@ def report_review_response(current_report: dict[str, Any], attachments: list[dic
                 ["Bull case", debate.get("bull_case") or "Price, timing, and structure all need to line up."],
                 ["Bear case", debate.get("bear_case") or "Time decay, IV changes, and required move can offset the thesis."],
                 ["Risk judge", debate.get("risk_judge") or "Risk budget should control the decision, not confidence."],
+                ["Missing data", ", ".join(missing_fields[:4]) or "None flagged"],
             ],
         },
     ]
     return answer, cards, blocks
+
+
+def report_missing_contract_fields(report: dict[str, Any]) -> list[str]:
+    snapshot = report.get("contractSnapshot") or report.get("contract_snapshot") or {}
+    data_quality = report.get("dataQuality") or report.get("data_quality") or {}
+    pending = [str(item).replace("_", " ") for item in data_quality.get("fields_pending") or []]
+    checks = [
+        ("live premium", snapshot.get("lastPrice") or snapshot.get("mark") or report.get("premium")),
+        ("bid/ask", (snapshot.get("bid"), snapshot.get("ask"))),
+        ("implied volatility", snapshot.get("impliedVolatility") or snapshot.get("iv") or report.get("impliedVolatility")),
+        ("Greeks", snapshot.get("delta") or snapshot.get("theta") or snapshot.get("gamma") or snapshot.get("vega")),
+        ("volume", snapshot.get("volume") or snapshot.get("contractVolume") or report.get("contractVolume")),
+        ("open interest", snapshot.get("openInterest") or report.get("openInterest")),
+        ("earnings date", report.get("earningsDate") or report.get("earnings_date")),
+    ]
+    missing = list(pending)
+    for label, value in checks:
+        is_missing = value in (None, "", [], {})
+        if isinstance(value, tuple):
+            is_missing = any(part in (None, "") for part in value)
+        if is_missing and label not in missing:
+            missing.append(label)
+    return missing
 
 
 def general_finance_response(message: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
@@ -716,9 +1375,10 @@ def missing_trade_context_response() -> tuple[str, list[dict[str, Any]], list[di
     return answer, cards, blocks
 
 
-def attachment_needs_details_response(attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+def attachment_needs_details_response(message: str, attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     extracted = extract_attachment_contract(attachments)
     if extracted.get("ticker") and (extracted.get("strike") or extracted.get("premium") or extracted.get("expiration")):
+        lower = message.lower()
         fields = [
             ["Ticker", str(extracted.get("ticker") or "Unknown")],
             ["Side", str(extracted.get("side") or "Call/put not clear")],
@@ -727,11 +1387,22 @@ def attachment_needs_details_response(attachments: list[dict[str, Any]]) -> tupl
             ["Premium", exact_dollars(extracted.get("premium")) if extracted.get("premium") is not None else "Missing"],
         ]
         missing = [label for label, value in fields if value == "Missing" or "not clear" in value.lower()]
-        answer = (
-            f"I can read enough from the upload to start: {extracted.get('ticker')} {extracted.get('side') or 'option'}"
-            f"{' at ' + dollars(extracted.get('strike')) if extracted.get('strike') is not None else ''}. "
-            "The important part is still risk math: premium paid, contracts, expiration, bid/ask, and whether the event/IV setup can shrink the option price."
+        live_missing = ["bid/ask", "current option price", "implied volatility", "Greeks", "volume", "open interest", "earnings date"]
+        readable = (
+            f"{extracted.get('ticker')} {extracted.get('side') or 'option'}"
+            f"{' at ' + dollars(extracted.get('strike')) if extracted.get('strike') is not None else ''}"
         )
+        if has_any_term(lower, ["missing data", "what data", "missing", "need before", "before trusting"]):
+            answer = (
+                f"From the upload I can read enough to identify {readable}. "
+                f"The missing pieces are {', '.join([*missing, *live_missing][:8]).lower()}. "
+                "Those are exactly the fields RiskWise should not invent, because they control fill quality, IV crush risk, liquidity, and whether the current option price is real."
+            )
+        else:
+            answer = (
+                f"I can read enough from the upload to start: {readable}. "
+                "The important part is still risk math: premium paid, contracts, expiration, bid/ask, and whether the event/IV setup can shrink the option price."
+            )
         if missing:
             answer += f" I still need {', '.join(missing[:3]).lower()} before treating this as a full review."
         cards = [
@@ -758,19 +1429,44 @@ def attachment_needs_details_response(attachments: list[dict[str, Any]]) -> tupl
     return answer, cards, blocks
 
 
-def saved_trade_lookup_response(recent_checks: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+def saved_trade_lookup_response(message: str, recent_checks: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    lower = message.lower()
     latest = (recent_checks[0].get("report") if recent_checks and "report" in recent_checks[0] else recent_checks[0]) if recent_checks else {}
+    insight = saved_checks_insight(recent_checks)
     title = report_title(latest)
     posture = latest.get("riskPosture") or latest.get("risk_posture") or "mixed"
     setup_score = latest.get("setupScore") or latest.get("setup_score") or "--"
     weakest = latest.get("weakestLink") or latest.get("weakest_link") or "not labeled yet"
     risk_math = latest.get("riskMath") or latest.get("risk_math") or {}
     max_loss = dollars(risk_math.get("max_loss") or latest.get("amountAtRisk") or latest.get("amount_at_risk"))
-    answer = (
-        f"The latest saved trade check I can see is {title}. It is labeled {str(posture).lower()} risk, with a setup score of {setup_score}. "
-        f"The weak point is {weakest}, and the max-loss anchor shown is {max_loss}.\n\n"
-        "If this is the trade you mean, ask me to explain it, debate it, or simplify the risk."
-    )
+    required_move = risk_math.get("required_move_to_breakeven_pct")
+    dte = risk_math.get("calendar_days_left") or risk_math.get("trading_days_left") or risk_math.get("days_to_expiration")
+    missing_fields = report_missing_contract_fields(latest)
+    if has_any_term(lower, ["pattern", "repeat", "repeated", "mistake", "usually", "history", "past"]):
+        answer = (
+            f"From the saved checks I can see, the repeated weak point is {insight['repeated_weakest']}. "
+            f"The riskiest saved check is {insight['riskiest_title']} with max loss {dollars(insight['riskiest_loss'])}. "
+            f"The last ticker analyzed was {insight['last_ticker']}. Treat this as product memory, not a trading signal."
+        )
+    elif has_any_term(lower, ["missing data", "what data", "missing", "need before", "before trusting"]):
+        answer = (
+            f"For your latest saved check, {title}, the missing pieces are {', '.join(missing_fields[:6]) or 'not clearly flagged'}. "
+            f"RiskWise can still use the saved max loss {max_loss} and weakest link {weakest}, but those missing fields limit confidence."
+        )
+    elif has_any_term(lower, ["why", "risky", "risk", "what can go wrong", "what can break", "break this", "breaks this", "invalidate", "fail", "weakest"]):
+        answer = (
+            f"Your latest saved check, {title}, was risky mainly because the weak point is {weakest}. "
+            f"The saved report shows max loss {max_loss}"
+            f"{f', required move {required_move}%' if required_move is not None else ''}"
+            f"{f', and {dte} days left' if dte is not None else ''}. "
+            "That means the setup needs direction, timing, and contract quality to line up."
+        )
+    else:
+        answer = (
+            f"The latest saved trade check I can see is {title}. It is labeled {str(posture).lower()} risk, with a setup score of {setup_score}. "
+            f"The weak point is {weakest}, and the max-loss anchor shown is {max_loss}.\n\n"
+            "If this is the trade you mean, ask me to explain it, debate it, or simplify the risk."
+        )
     cards = [
         {"label": "Latest check", "value": title, "tone": "good"},
         {"label": "Risk posture", "value": str(posture), "tone": "warn"},
@@ -779,17 +1475,51 @@ def saved_trade_lookup_response(recent_checks: list[dict[str, Any]]) -> tuple[st
     blocks = [
         {
             "type": "mini_table",
-            "title": "Snapshot",
-            "rows": [["Setup score", str(setup_score)], ["Weakest link", str(weakest)], ["Question", "Is this the trade you meant?"]],
+            "title": "Saved-check memory",
+            "rows": [
+                ["Latest", title],
+                ["Riskiest", insight["riskiest_title"]],
+                ["Repeated weak point", insight["repeated_weakest"]],
+                ["Last ticker", insight["last_ticker"]],
+                ["Missing data", ", ".join(missing_fields[:4]) or "None flagged"],
+            ],
         }
     ]
     return answer, cards, blocks
 
 
+def saved_checks_insight(recent_checks: list[dict[str, Any]]) -> dict[str, Any]:
+    reports = []
+    for item in recent_checks:
+        report = item.get("report") if isinstance(item, dict) else item
+        if isinstance(report, dict):
+            reports.append(report)
+    if not reports:
+        return {"riskiest_title": "No saved check", "riskiest_loss": 0, "repeated_weakest": "not enough saved history", "last_ticker": "unknown"}
+    weakest_counts: dict[str, int] = {}
+    riskiest = reports[0]
+    riskiest_loss = -1.0
+    for report in reports:
+        weakest = str(report.get("weakestLink") or report.get("weakest_link") or "not labeled").lower()
+        weakest_counts[weakest] = weakest_counts.get(weakest, 0) + 1
+        risk_math = report.get("riskMath") or report.get("risk_math") or {}
+        loss = number_from_any(risk_math.get("max_loss") or report.get("amountAtRisk") or report.get("amount_at_risk")) or 0
+        if loss > riskiest_loss:
+            riskiest = report
+            riskiest_loss = loss
+    repeated = max(weakest_counts.items(), key=lambda item: item[1])[0]
+    return {
+        "riskiest_title": report_title(riskiest),
+        "riskiest_loss": riskiest_loss,
+        "repeated_weakest": repeated,
+        "last_ticker": str(reports[0].get("ticker") or "unknown").upper(),
+    }
+
+
 def risk_math_response(message: str, user_profile: dict[str, Any] | None, attachments: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     lower = message.lower()
     account_size = float((user_profile or {}).get("accountSize") or 25000)
-    risk_pct = float((user_profile or {}).get("riskBudgetPercent") or 2)
+    risk_pct = profile_risk_limit_percent(user_profile) or 2
     parsed_numbers = [float(item.replace(",", "")) for item in re.findall(r"\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)", message)]
     parsed_answer = ""
     if len(parsed_numbers) >= 2:
@@ -802,7 +1532,7 @@ def risk_math_response(message: str, user_profile: dict[str, Any] | None, attach
                 "For a long option, that premium is the max-loss anchor because it can go to zero. "
             )
     budget = account_size * risk_pct / 100
-    if "guarantee" in lower or "safe options trade" in lower or "exactly which" in lower or "should i" in lower or "half my account" in lower:
+    if is_direct_trade_request(lower):
         answer = (
             "I cannot pick a live trade or guarantee a safe options outcome. The useful move is to turn it into a risk check: ticker, strike, expiration, premium, account size, max loss, and event risk. "
             "If the premium loss would damage the account, the setup fails the risk test before direction even matters."
@@ -846,6 +1576,25 @@ def risk_math_response(message: str, user_profile: dict[str, Any] | None, attach
         }
     ]
     return answer, cards, blocks
+
+
+def is_direct_trade_request(lower: str) -> bool:
+    return any(
+        phrase in lower
+        for phrase in [
+            "guarantee",
+            "safe options trade",
+            "exactly which",
+            "should i buy",
+            "should i sell",
+            "should i enter",
+            "should i exit",
+            "what should i buy",
+            "what should i sell",
+            "half my account",
+            "all in",
+        ]
+    )
 
 
 def strategy_response(message: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1017,11 +1766,19 @@ def concept_response(message: str, attachments: list[dict[str, Any]]) -> tuple[s
         title = "IV term structure"
         rows = [["Compares", "IV across expirations"], ["Event effect", "Near-term IV can jump"], ["Risk lens", "Expiration choice changes the trade"]]
     elif "open interest" in lower:
-        answer = (
-            "Open interest is the number of option contracts that remain open. It is not the same as today's volume. Higher open interest can signal a more established contract, but it does not prove direction."
-        )
+        if has_any_term(lower, ["right now", "today", "healthy", "enough", "contract", "call", "put"]) and re.search(r"\b[A-Z]{1,5}\b", message.upper()):
+            answer = (
+                "Open interest is the number of option contracts that remain open, but I should not invent whether this specific contract is healthy. "
+                "For that, RiskWise needs live option-chain or provider data: open interest, today's volume, bid/ask, IV, Greeks, and the exact expiration. "
+                "Without those fields, I can explain what open interest means, but not confirm liquidity on that contract."
+            )
+            rows = [["Known", "Open interest explains open contracts"], ["Missing", "Live option chain/provider data"], ["Do not assume", "Liquidity or fill quality"]]
+        else:
+            answer = (
+                "Open interest is the number of option contracts that remain open. It is not the same as today's volume. Higher open interest can signal a more established contract, but it does not prove direction."
+            )
+            rows = [["Means", "Open contracts"], ["Different from", "Today's trading volume"], ["Use", "Liquidity context, not direction proof"]]
         title = "Open interest"
-        rows = [["Means", "Open contracts"], ["Different from", "Today's trading volume"], ["Use", "Liquidity context, not direction proof"]]
     elif "volume" in lower and "volatility" not in lower:
         answer = (
             "Option volume is how many contracts traded today. High volume can help liquidity and price discovery, but by itself it does not say whether calls or puts are smart."
@@ -1124,7 +1881,14 @@ def concept_response(message: str, attachments: list[dict[str, Any]]) -> tuple[s
         )
         title = "Gamma"
         rows = [["Measures", "Delta acceleration"], ["Biggest near", "Expiration and ATM strikes"], ["Risk", "Small stock moves can change exposure fast"]]
-    elif has_any_term(lower, ["delta", "vega", "greek"]):
+    elif "delta" in lower:
+        answer = (
+            "Delta is the option's stock-move sensitivity. In plain English, it estimates how much the option price may change when the underlying stock moves by $1. "
+            "It is also a rough directional exposure clue, but it is not a win probability and it can change quickly near expiration."
+        )
+        title = "Delta"
+        rows = [["Measures", "Option sensitivity to the stock"], ["Moves with", "Underlying price and time"], ["Risk", "Can change quickly near expiration"]]
+    elif has_any_term(lower, ["vega", "greek"]):
         answer = "Greeks are the contract dashboard. They tell you how the option reacts to price, time, and volatility."
         title = "Greeks"
         rows = [["Delta", "Price sensitivity"], ["Gamma", "Delta acceleration"], ["Theta", "Time decay"], ["Vega", "IV sensitivity"]]
@@ -1335,11 +2099,31 @@ def attachment_context_rows(attachments: list[dict[str, Any]]) -> list[list[str]
     return rows or [["Attachment", "No readable context"]]
 
 
+def attachment_contract_context(attachments: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not attachments:
+        return None
+    extracted = normalize_extracted_contract(extract_attachment_contract(attachments))
+    return extraction_payload(
+        extracted,
+        attachments,
+        provider="text-parser" if is_extraction_useful(extracted) else "none",
+        confidence=0.72 if is_extraction_useful(extracted) else 0.0,
+        message=(
+            "RiskWise extracted readable uploaded-contract text. Confirm every field before analysis."
+            if is_extraction_useful(extracted)
+            else "RiskWise could not read enough contract fields from this upload."
+        ),
+    )
+
+
 def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, Any]:
     text = " ".join(str(item.get("text") or "") for item in attachments)
     upper = text.upper()
     if not upper.strip():
         return {}
+    shorthand = parse_contract_shorthand(text)
+    if shorthand:
+        return shorthand
     labeled_ticker = re.search(r"\b(?:TICKER|SYMBOL|UNDERLYING)\s*(?:IS|=|:)?\s*\$?([A-Z]{1,5})\b", upper)
     ticker_match = labeled_ticker or re.search(r"(?<![A-Z])\$?([A-Z]{1,5})(?:\s+(?:CALL|PUT)|\s+\$?\d{1,4}(?:\.\d{1,2})?)", upper)
     side = None
@@ -1352,6 +2136,13 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
     if premium is None:
         premium_match = re.search(r"(?:PREMIUM|MID|DEBIT|COST|PAID)\D{0,12}([0-9]+(?:\.[0-9]+)?)", upper)
         premium = attachment_number_from_value(premium_match.group(1)) if premium_match else None
+    bid = parse_attachment_number(text, ["bid"])
+    ask = parse_attachment_number(text, ["ask"])
+    implied_volatility = parse_attachment_number(text, ["implied volatility", "iv"])
+    open_interest = parse_attachment_number(text, ["open interest", "oi"])
+    contract_volume = parse_attachment_number(text, ["contract volume", "volume"])
+    underlying_price = parse_attachment_number(text, ["underlying price", "stock price", "underlying"])
+    contracts = parse_attachment_number(text, ["contracts", "quantity", "qty"])
     expiration = None
     exp_match = re.search(r"(?:EXPIRATION|EXP|EXPIRES?)\D{0,12}([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
     if exp_match:
@@ -1361,7 +2152,245 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
         "side": side,
         "strike": strike,
         "premium": premium,
+        "bid": bid,
+        "ask": ask,
+        "impliedVolatility": implied_volatility,
+        "openInterest": open_interest,
+        "contractVolume": contract_volume,
+        "underlyingPrice": underlying_price,
+        "contracts": contracts,
         "expiration": expiration,
+    }
+
+
+def parse_contract_shorthand(text: str) -> dict[str, Any]:
+    compact = re.search(r"\b([A-Z]{1,5})(\d{2})(\d{2})(\d{2})([CP])(\d{8})\b", text.upper())
+    if compact:
+        strike = int(compact.group(6)) / 1000
+        return {
+            "ticker": compact.group(1),
+            "side": "Call" if compact.group(5) == "C" else "Put",
+            "strike": strike,
+            "premium": parse_shorthand_premium(text),
+            "bid": parse_attachment_number(text, ["bid"]),
+            "ask": parse_attachment_number(text, ["ask"]),
+            "impliedVolatility": parse_attachment_number(text, ["iv", "implied volatility"]),
+            "openInterest": parse_attachment_number(text, ["oi", "open interest"]),
+            "contractVolume": parse_attachment_number(text, ["vol", "volume"]),
+            "underlyingPrice": parse_attachment_number(text, ["underlying", "stock price"]),
+            "contracts": parse_attachment_number(text, ["qty", "quantity", "contracts"]) or parse_contract_quantity(text),
+            "expiration": normalize_shorthand_expiration(f"20{compact.group(2)}-{compact.group(3)}-{compact.group(4)}"),
+        }
+    patterns = [
+        r"\b([A-Z]{1,5})\s+(\d{1,4}(?:\.\d{1,2})?)\s*([CP])\s+(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b",
+        r"\b([A-Z]{1,5})\s+(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\s+(\d{1,4}(?:\.\d{1,2})?)\s*(CALL|PUT|[CP])\b",
+        r"\b([A-Z]{1,5})\s+(\d{1,4}(?:\.\d{1,2})?)\s+(CALL|PUT)\s+(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text.upper())
+        if not match:
+            continue
+        groups = match.groups()
+        ticker = groups[0]
+        if "/" in groups[1] or "-" in groups[1]:
+            expiration = groups[1]
+            strike = groups[2]
+            side_raw = groups[3]
+        else:
+            strike = groups[1]
+            side_raw = groups[2]
+            expiration = groups[3]
+        return {
+            "ticker": ticker,
+            "side": "Call" if side_raw.startswith("C") else "Put",
+            "strike": attachment_number_from_value(strike),
+            "premium": parse_shorthand_premium(text),
+            "bid": parse_attachment_number(text, ["bid"]),
+            "ask": parse_attachment_number(text, ["ask"]),
+            "impliedVolatility": parse_attachment_number(text, ["iv", "implied volatility"]),
+            "openInterest": parse_attachment_number(text, ["oi", "open interest"]),
+            "contractVolume": parse_attachment_number(text, ["vol", "volume"]),
+            "underlyingPrice": parse_attachment_number(text, ["underlying", "stock price"]),
+            "contracts": parse_attachment_number(text, ["qty", "quantity", "contracts"]) or parse_contract_quantity(text),
+            "expiration": normalize_shorthand_expiration(expiration),
+        }
+    return {}
+
+
+def parse_shorthand_premium(text: str) -> float | None:
+    match = re.search(r"(?:@|MARK|MID|DEBIT|PREM(?:IUM)?)\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
+    return attachment_number_from_value(match.group(1)) if match else None
+
+
+def parse_contract_quantity(text: str) -> float | None:
+    match = re.search(r"\b([1-9]\d?)\s*x\b|\bx\s*([1-9]\d?)\b", text, re.IGNORECASE)
+    if not match:
+        return None
+    return attachment_number_from_value(match.group(1) or match.group(2))
+
+
+def normalize_shorthand_expiration(value: str) -> str:
+    text = str(value or "").strip()
+    if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", text):
+        return text
+    match = re.match(r"(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$", text)
+    if not match:
+        return text
+    month = int(match.group(1))
+    day = int(match.group(2))
+    raw_year = match.group(3)
+    year = int(raw_year) if raw_year else date.today().year
+    if year < 100:
+        year += 2000
+    if not raw_year and date(year, month, day) < date.today():
+        year += 1
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+async def extract_contract_from_uploads(attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    clean = sanitize_attachments(attachments)
+    text_extracted = normalize_extracted_contract(extract_attachment_contract(clean))
+    if is_extraction_useful(text_extracted):
+        return extraction_payload(
+            text_extracted,
+            clean,
+            provider="text-parser",
+            confidence=0.72,
+            message="RiskWise extracted readable contract text. Confirm every field before analysis.",
+        )
+
+    has_image = any(item.get("dataUrl") and str(item.get("type") or "").startswith("image/") for item in clean)
+    if has_image:
+        prompt = (
+            "Read this options contract screenshot. Return JSON only with these keys: "
+            "ticker, side, strike, expiration, premium, bid, ask, impliedVolatility, openInterest, contractVolume, underlyingPrice, contracts. "
+            "Use null for fields you cannot clearly read. Do not infer or guess missing fields."
+        )
+        try:
+            result = await generate_answer(
+                system_prompt=(
+                    "You extract visible options contract fields from screenshots. "
+                    "Return strict JSON only. Do not guess. Do not add commentary."
+                ),
+                prompt=prompt,
+                attachments=clean,
+            )
+        except Exception:
+            result = None
+        if result and result.text:
+            vision_extracted = normalize_extracted_contract(parse_extraction_json(result.text))
+            if is_extraction_useful(vision_extracted):
+                return extraction_payload(
+                    vision_extracted,
+                    clean,
+                    provider=result.provider,
+                    model=result.model,
+                    confidence=0.82,
+                    message="RiskWise read visible screenshot fields. Confirm them before analysis.",
+                )
+
+    return extraction_payload(
+        {},
+        clean,
+        provider="none",
+        confidence=0.0,
+        message=(
+            "RiskWise could not read enough contract fields from this upload. "
+            "Enter ticker, call/put, strike, expiration, premium, and contract count manually."
+        ),
+    )
+
+
+def parse_extraction_json(text: str) -> dict[str, Any]:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"```$", "", cleaned).strip()
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(0)
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
+    if not data:
+        return {}
+    side = data.get("side") or data.get("optionSide") or data.get("option_side")
+    normalized_side = str(side).strip().lower() if side else ""
+    if "call" in normalized_side:
+        option_side = "call"
+        trade_type = "Call Option (Long)"
+    elif "put" in normalized_side:
+        option_side = "put"
+        trade_type = "Put Option (Long)"
+    else:
+        option_side = ""
+        trade_type = ""
+    return {
+        "ticker": clean_extracted_ticker(data.get("ticker") or data.get("symbol") or data.get("underlying")),
+        "optionSide": option_side or None,
+        "tradeType": trade_type or None,
+        "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice")),
+        "expiration": str(data.get("expiration") or data.get("expirationDate") or "").strip() or None,
+        "premium": normalize_optional_number(data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost")),
+        "bid": normalize_optional_number(data.get("bid")),
+        "ask": normalize_optional_number(data.get("ask")),
+        "impliedVolatility": normalize_optional_number(data.get("impliedVolatility") or data.get("iv")),
+        "openInterest": normalize_optional_number(data.get("openInterest") or data.get("oi")),
+        "contractVolume": normalize_optional_number(data.get("contractVolume") or data.get("volume")),
+        "underlyingPrice": normalize_optional_number(data.get("underlyingPrice") or data.get("stockPrice")),
+        "contracts": normalize_optional_number(data.get("contracts") or data.get("quantity")),
+    }
+
+
+def clean_extracted_ticker(value: Any) -> str | None:
+    ticker = re.sub(r"[^A-Za-z.]", "", str(value or "")).upper()
+    if not ticker or ticker in {"CALL", "PUT", "EXP", "IV", "MID"}:
+        return None
+    return ticker[:8]
+
+
+def normalize_optional_number(value: Any) -> str | None:
+    number = attachment_number_from_value(value)
+    if number is None:
+        return None
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:.4f}".rstrip("0").rstrip(".")
+
+
+def is_extraction_useful(extracted: dict[str, Any]) -> bool:
+    return bool(extracted.get("ticker") and (extracted.get("strike") or extracted.get("premium") or extracted.get("expiration")))
+
+
+def extraction_payload(
+    extracted: dict[str, Any],
+    attachments: list[dict[str, Any]],
+    *,
+    provider: str,
+    confidence: float,
+    message: str,
+    model: str | None = None,
+) -> dict[str, Any]:
+    required = ["ticker", "optionSide", "strike", "expiration", "premium", "contracts"]
+    missing = [field for field in required if not extracted.get(field)]
+    live_fields = ["bid", "ask", "impliedVolatility", "openInterest", "contractVolume"]
+    missing_live = [field for field in live_fields if not extracted.get(field)]
+    if not any(extracted.get(field) for field in ["delta", "theta", "gamma", "vega", "Greeks"]):
+        missing_live.append("Greeks")
+    return {
+        "status": "ok" if is_extraction_useful(extracted) else "needs_manual_review",
+        "fields": {key: value for key, value in extracted.items() if value not in (None, "")},
+        "missing_fields": missing,
+        "missing_live_fields": missing_live,
+        "confidence": confidence,
+        "provider": provider,
+        "model": model or "",
+        "message": message,
+        "attachments": attachment_context_rows(attachments),
     }
 
 
@@ -1447,9 +2476,57 @@ def should_use_fast_path(
         "missing_trade_context",
         "saved_trade_lookup",
         "trade_identity",
+        "simplify",
+        "followup",
+        "strategy_explainer",
+        "risk_math",
     }:
         return True
+    if mode == "trade_review" and current_report:
+        return True
+    if mode == "concept" and is_high_confidence_core_concept(lower):
+        return True
     return False
+
+
+def is_high_confidence_core_concept(lower: str) -> bool:
+    market_data_phrases = [
+        "today",
+        "right now",
+        "current",
+        "live",
+        "this week",
+        "for aapl",
+        "for nvda",
+        "for msft",
+        "for tsla",
+        "for spy",
+        "for qqq",
+    ]
+    if any(phrase in lower for phrase in market_data_phrases):
+        return False
+    core_topics = [
+        "iv crush",
+        "implied volatility",
+        "theta decay",
+        "theta",
+        "delta",
+        "gamma",
+        "vega",
+        "rho",
+        "bid ask",
+        "bid-ask",
+        "open interest",
+        "option volume",
+        "liquidity",
+        "intrinsic",
+        "extrinsic",
+        "assignment",
+        "pin risk",
+        "volatility skew",
+        "term structure",
+    ]
+    return any(topic in lower for topic in core_topics)
 
 
 def compact_history(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1628,6 +2705,10 @@ def is_low_quality_llm_answer(answer: str, mode: str) -> bool:
     stripped = answer.strip()
     if not stripped:
         return True
+    if stripped.startswith("{") or stripped.startswith("[") or '"answer"' in stripped[:80]:
+        return True
+    if "```" in stripped:
+        return True
     words = stripped.split()
     if mode not in {"greeting", "smalltalk"} and len(words) < 16:
         return True
@@ -1636,6 +2717,334 @@ def is_low_quality_llm_answer(answer: str, mode: str) -> bool:
     if stripped.lower() in {"i don't know.", "i am not sure.", "i can't help with that."}:
         return True
     return False
+
+
+def should_accept_llm_answer(
+    answer: str,
+    fallback_response: dict[str, Any],
+    mode: str,
+    message: str,
+    tool_context: dict[str, Any],
+) -> bool:
+    return not llm_answer_rejection_reasons(answer, fallback_response, mode, message, tool_context)
+
+
+def llm_answer_rejection_reasons(
+    answer: str,
+    fallback_response: dict[str, Any],
+    mode: str,
+    message: str,
+    tool_context: dict[str, Any],
+) -> list[str]:
+    reasons = []
+    if is_low_quality_llm_answer(answer, mode):
+        reasons.append("low_quality_answer")
+    normalized = normalize_answer_text(answer)
+    if has_textbook_voice(normalized):
+        reasons.append("textbook_voice")
+    if ignores_selected_trade(normalized, fallback_response, mode):
+        reasons.append("ignored_selected_trade")
+    if ignores_profile_style(normalized, tool_context, mode):
+        reasons.append("ignored_profile_style")
+    if misses_core_concept(normalized, message, mode):
+        reasons.append("missed_core_concept")
+    if gives_direct_trading_instruction(normalized):
+        reasons.append("direct_trading_instruction")
+    if has_bad_options_math(normalized):
+        reasons.append("bad_options_math")
+    if fabricates_missing_live_data(normalized, fallback_response):
+        reasons.append("fabricated_live_data")
+    return reasons
+
+
+def normalize_answer_text(answer: str) -> str:
+    return re.sub(r"\s+", " ", answer.lower()).strip()
+
+
+def has_textbook_voice(normalized: str) -> bool:
+    textbook_phrases = [
+        "is a phenomenon",
+        "in the context of options",
+        "it is important to understand",
+        "there are several factors to consider",
+        "the option contract suddenly and significantly decreases",
+        "as an options trader",
+        "as a trader, you should",
+        "in conclusion",
+    ]
+    if any(phrase in normalized for phrase in textbook_phrases):
+        return True
+    if normalized.startswith(("an option is a contract", "options are financial derivatives")):
+        return True
+    return False
+
+
+def ignores_selected_trade(normalized: str, fallback_response: dict[str, Any], mode: str) -> bool:
+    if mode not in {"trade_review", "trade_identity", "saved_trade_lookup"}:
+        return False
+    context = fallback_response.get("normalized_context") or {}
+    selected = context.get("selected_contract") or {}
+    ticker = str(context.get("ticker") or selected.get("ticker") or "").lower()
+    strike = str(selected.get("strike") or "")
+    if ticker and ticker not in normalized:
+        return True
+    if strike and strike not in normalized and mode != "saved_trade_lookup":
+        return True
+    if "do not see a trade" in normalized or "need the trade details" in normalized:
+        return True
+    return False
+
+
+def ignores_profile_style(normalized: str, tool_context: dict[str, Any], mode: str) -> bool:
+    if mode in {"greeting", "smalltalk"}:
+        return False
+    profile = profile_memory_from_tool_context(tool_context)
+    if not profile:
+        return False
+    style = str(profile.get("preferred_explanation") or "").lower()
+    strictness = str(profile.get("risk_strictness") or "").lower()
+    if "quant" in style:
+        metric_terms = ["max loss", "breakeven", "dte", "%", "iv", "delta", "theta", "premium"]
+        if not any(term in normalized for term in metric_terms):
+            return True
+    if "strict" in strictness:
+        strict_terms = ["max loss", "risk", "missing", "invalid", "breakeven", "size"]
+        if not any(term in normalized for term in strict_terms):
+            return True
+    return False
+
+
+def profile_memory_from_tool_context(tool_context: dict[str, Any]) -> dict[str, Any]:
+    for item in tool_context.get("tool_results") or []:
+        if item.get("name") == "retrieve_profile_memory":
+            result = item.get("result") or {}
+            return result if result.get("status") == "ok" else {}
+    return {}
+
+
+def misses_core_concept(normalized: str, message: str, mode: str) -> bool:
+    lower = message.lower()
+    if mode != "concept":
+        return False
+    if has_any_term(lower, ["iv", "implied", "crush"]) and not all(
+        term in normalized for term in ["premium", "uncertainty"]
+    ):
+        return True
+    if "theta" in lower and "time" not in normalized and "decay" not in normalized:
+        return True
+    if "delta" in lower and "stock" not in normalized and "underlying" not in normalized:
+        return True
+    if "liquidity" in lower and not any(term in normalized for term in ["bid", "ask", "volume", "open interest"]):
+        return True
+    return False
+
+
+def has_bad_options_math(normalized: str) -> bool:
+    bad_phrases = [
+        "breakeven at the higher strike plus premium",
+        "breakeven is the higher strike plus premium",
+        "debit spread breakeven at the higher strike",
+        "max loss is unlimited",
+        "long call max loss is unlimited",
+        "theta helps long calls",
+    ]
+    return any(phrase in normalized for phrase in bad_phrases)
+
+
+def gives_direct_trading_instruction(normalized: str) -> bool:
+    bad_phrases = [
+        "you should buy",
+        "you should sell",
+        "i recommend buying",
+        "i recommend selling",
+        "definitely buy",
+        "definitely sell",
+        "enter the trade",
+        "exit the trade",
+        "take the trade",
+        "good entry",
+        "hold it until",
+    ]
+    return any(phrase in normalized for phrase in bad_phrases)
+
+
+def fabricates_missing_live_data(normalized: str, fallback_response: dict[str, Any]) -> bool:
+    missing = " ".join(str(item).lower() for item in fallback_response.get("missing_data") or [])
+    if not missing:
+        return False
+    suspicious_claims = [
+        "currently has an iv",
+        "iv is currently",
+        "iv currently",
+        "iv is around",
+        "iv is near",
+        "iv is about",
+        "implied volatility is",
+        "implied volatility currently",
+        "bid is",
+        "ask is",
+        "bid sits",
+        "ask sits",
+        "bid/ask is",
+        "mid price is",
+        "last trade was",
+        "mark price is",
+        "open interest is",
+        "open interest of",
+        "volume is",
+        "volume of",
+        "oi is",
+        "delta is",
+        "gamma is",
+        "theta is",
+        "vega is",
+        "delta around",
+        "theta near",
+        "earnings are on",
+        "earnings is on",
+        "earnings date is",
+        "reports earnings on",
+        "reports earnings tomorrow",
+        "earnings are this week",
+        "earnings are tomorrow",
+        "is trading at $",
+        "trading at $",
+        "currently trading at",
+        "right now at $",
+        "current price is",
+        "option chain shows",
+        "premium is $",
+        "contract is cheap",
+        "contract is expensive",
+        "iv looks high",
+        "iv looks low",
+        "liquidity is strong",
+        "liquidity looks strong",
+        "bid/ask spread is tight",
+        "open interest looks healthy",
+        "earnings are next week",
+        "greeks look favorable",
+        "greeks are favorable",
+        "chain is liquid",
+        "nearest expiration is",
+        "chain has plenty",
+        "option chain looks liquid",
+        "chain looks liquid",
+        "execution should not be an issue",
+        "fills should be fine",
+        "enough volume",
+        "good participation",
+        "clean pricing",
+        "spread is tight",
+        "bid ask is tight",
+        "bid-ask is tight",
+        "spread is only",
+        "option is pricing in",
+        "market is pricing",
+        "market expects",
+        "expected move is",
+        "iv percentile is",
+        "iv rank is",
+        "skew is steep",
+        "term structure is inverted",
+    ]
+    if any(claim in normalized for claim in suspicious_claims):
+        return True
+    if re.search(r"\b(?:iv|implied volatility)\s+(?:is|sits|stands|runs)?\s*(?:at|around|near|about|currently)?\s*\d+(?:\.\d+)?\s*%", normalized):
+        return True
+    if re.search(r"\b(?:delta|gamma|theta|vega|rho)\s+(?:is|=|of|at|around|near|about)?\s*-?\d+(?:\.\d+)?", normalized):
+        return True
+    if re.search(r"\bhas\s+(?:a|an)\s+-?\d+(?:\.\d+)?\s+(?:delta|gamma|theta|vega|rho)\b", normalized):
+        return True
+    if re.search(r"\bhas\s+(?:a|an)?\s*(?:delta|gamma|theta|vega|rho)\s+(?:of|at|around|near|about)\s+-?\d+(?:\.\d+)?", normalized):
+        return True
+    if re.search(r"\b(?:bid|ask|mid price|mark price|last price|last trade)\s+(?:is|=|at|sits at|stands at|around|near|about|of|was)\s+\$?\d+(?:\.\d+)?", normalized):
+        return True
+    if re.search(r"\b(?:premium|mark|mid|last)\s+(?:is|=|at|around|near|about|of)\s+\$?\d+(?:\.\d+)?", normalized):
+        return True
+    if re.search(r"\b(?:current price|stock price|underlying price)\s+(?:is|=|at)\s+\$?\d+(?:\.\d+)?", normalized):
+        return True
+    if re.search(r"\b(?:open interest|volume|oi)\s+(?:is|=|at|around|near|about|of)\s+[\d,]+", normalized):
+        return True
+    if re.search(r"\b[\d,]+\s+(?:open interest|volume|oi|contracts)\b", normalized):
+        return True
+    if re.search(r"\b(?:earnings|earnings date|reports earnings)\s+(?:is|are|on|for)\s+[a-z]+\s+\d{1,2}", normalized):
+        return True
+    if re.search(r"\b(?:earnings|earnings date|reports earnings|reports)\b.*\b(?:today|tomorrow|this week|next week|monday|tuesday|wednesday|thursday|friday)\b", normalized):
+        return True
+    return False
+
+
+def apply_profile_voice(response: dict[str, Any], tool_context: dict[str, Any]) -> None:
+    profile = profile_memory_from_tool_context(tool_context)
+    if not profile or response.get("mode") in {"greeting", "smalltalk"}:
+        return
+    answer = str(response.get("answer") or "").strip()
+    if not answer:
+        return
+    style = str(profile.get("preferred_explanation") or "").lower()
+    question_style = str(profile.get("question_style") or "").lower()
+    strictness = str(profile.get("risk_strictness") or "").lower()
+    common_mistakes = profile.get("common_mistakes") or []
+    risk_rules = profile.get("risk_rules") or {}
+    additions = []
+    answer_lower = answer.lower()
+    risk_limit = number_from_any(risk_rules.get("max_risk_per_trade_percent"))
+    if "simple" in style and "plain version" not in answer_lower:
+        additions.append("Plain version: focus on what you paid, what can vanish, and what data is still missing.")
+    if "strict" in strictness and "risk" not in answer_lower:
+        additions.append("RiskWise would keep the read anchored to max loss, breakeven, and what data is still missing.")
+    if "quant" in style and not any(term in answer_lower for term in ["max loss", "breakeven", "dte", "%"]):
+        additions.append("The sharper version is to tie the idea back to premium paid, breakeven move, DTE, and account-risk percent.")
+    if risk_limit is not None and f"{risk_limit:g}%" not in answer:
+        account = profile_account_size_from_tool_context(tool_context)
+        budget = f", about {dollars(account * risk_limit / 100)} on this profile" if account else ""
+        additions.append(f"Your saved risk limit is {risk_limit:g}% per trade{budget}.")
+    if risk_rules.get("warn_under_7_dte"):
+        dte = profile_dte_from_tool_context(tool_context)
+        if dte is not None and dte < 7 and "under 7 dte" not in answer_lower:
+            additions.append(f"Your profile says to warn under 7 DTE; this check has {dte:g} days left.")
+    if risk_rules.get("avoid_earnings_trades") and "earnings" in answer_lower and "avoid earnings trades" not in answer_lower:
+        additions.append("Your profile says to avoid earnings trades, so event premium and IV crush deserve extra caution.")
+    if common_mistakes and response.get("mode") in {"trade_review", "risk_math", "strategy_explainer"}:
+        first = str(common_mistakes[0]).strip()
+        if first and first.lower() not in answer_lower:
+            additions.append(f"Given your saved pattern, watch for {first.lower()} before trusting the setup.")
+    if "ask" in question_style and "first" in question_style and "?" not in answer:
+        additions.append("One question first: what would prove this setup wrong?")
+    if additions:
+        response["answer"] = clean_answer(f"{answer} {' '.join(additions)}")
+
+
+def profile_risk_limit_percent(user_profile: dict[str, Any] | None) -> float | None:
+    profile = user_profile or {}
+    risk_rules = profile.get("riskRules") or {}
+    return number_from_any(
+        risk_rules.get("maxRiskPerTradePercent")
+        or risk_rules.get("maxRiskPercent")
+        or profile.get("riskBudgetPercent")
+    )
+
+
+def profile_account_size_from_tool_context(tool_context: dict[str, Any]) -> float | None:
+    for item in tool_context.get("tool_results") or []:
+        if item.get("name") == "calculate_max_loss":
+            value = (item.get("result") or {}).get("account_size")
+            parsed = number_from_any(value)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def profile_dte_from_tool_context(tool_context: dict[str, Any]) -> float | None:
+    for item in tool_context.get("tool_results") or []:
+        if item.get("name") == "calculate_dte":
+            result = item.get("result") or {}
+            for key in ("calendar_days_left", "trading_days_left"):
+                parsed = number_from_any(result.get(key))
+                if parsed is not None:
+                    return parsed
+    return None
 
 
 def dollars(value: Any) -> str:

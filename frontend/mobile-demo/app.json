@@ -4,18 +4,46 @@
     "slug": "riskwise",
     "version": "0.1.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "scheme": "riskwise",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F8FBF8"
+    },
     "web": {
       "bundler": "metro",
-      "output": "single"
+      "output": "single",
+      "favicon": "./assets/favicon.png"
     },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "RiskWise lets you select contract screenshots so you can confirm details before running an educational risk check.",
+          "cameraPermission": "RiskWise lets you photograph contract screenshots so you can confirm details before running an educational risk check."
+        }
+      ],
+      "expo-secure-store"
+    ],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.aaravnagar.riskwise"
+      "bundleIdentifier": "com.aaravnagar.riskwise",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "RiskWise uses the camera only when you choose to capture a contract screenshot for educational risk review.",
+        "NSPhotoLibraryUsageDescription": "RiskWise uses your photo library only when you choose a contract screenshot for educational risk review.",
+        "NSPhotoLibraryAddUsageDescription": "RiskWise may save generated images only if you explicitly choose to export them."
+      }
     },
     "android": {
-      "package": "com.aaravnagar.riskwise"
+      "package": "com.aaravnagar.riskwise",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#092524"
+      }
     }
   }
 }

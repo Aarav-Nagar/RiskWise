@@ -1,24 +1,28 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import date, timedelta
+from importlib import import_module
 from typing import Any
 
-from api.models import (
+from ..models import (
     CompanyProfileResponse,
     EarningsResponse,
     MarketNewsResponse,
+    MarketProviderCapability,
+    MarketProviderStatusResponse,
     MarketQuoteResponse,
     MarketSearchResponse,
     OptionsAvailabilityResponse,
     OptionsContextResponse,
 )
-from api.settings import settings
+from ..settings import settings
 
 
 READY_FIELDS = ["ticker", "provider_status", "quote", "company_profile", "earnings_calendar", "stock_news"]
@@ -27,8 +31,10 @@ OPTIONS_LIVE_PENDING_FIELDS = ["live_premium", "bid_ask", "implied_volatility", 
 PENDING_FIELDS = ["option_chain", "implied_volatility", "expiration_dates", "live_premium", "breakeven_from_real_premium"]
 FMP_STABLE_BASE = "https://financialmodelingprep.com/stable"
 YAHOO_RSS_BASE = "https://feeds.finance.yahoo.com/rss/2.0/headline"
+ALPHA_VANTAGE_BASE = "https://www.alphavantage.co/query"
 _FMP_CACHE: dict[str, tuple[float, Any]] = {}
 _POLYGON_CACHE: dict[str, tuple[float, Any]] = {}
+_YFINANCE_IMPORT_ERROR: str | None | bool = False
 FALLBACK_SYMBOLS = [
     {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "exchange": "NYSE Arca", "sector": "ETF"},
     {"symbol": "QQQ", "name": "Invesco QQQ Trust", "exchange": "NASDAQ", "sector": "ETF"},
@@ -111,33 +117,54 @@ FALLBACK_SYMBOLS = [
 
 async def market_quote(ticker: str) -> MarketQuoteResponse:
     symbol = clean_symbol(ticker)
-    if not fmp_enabled():
-        return MarketQuoteResponse(
-            ticker=symbol,
-            status="needs_provider_key",
-            provider=settings.market_data_provider or "disabled",
-            message="FMP is not enabled for quotes.",
-        )
-    try:
-        rows = fmp_get("/quote", {"symbol": symbol})
-        row = first_dict(rows)
-        return MarketQuoteResponse(
-            ticker=symbol,
-            status="ok",
-            provider="financialmodelingprep",
-            name=str(row.get("name") or symbol),
-            price=number_or_none(row.get("price")),
-            change=number_or_none(row.get("change")),
-            changePercentage=number_or_none(row.get("changePercentage")),
-            volume=number_or_none(row.get("volume")),
-            dayLow=number_or_none(row.get("dayLow")),
-            dayHigh=number_or_none(row.get("dayHigh")),
-            yearLow=number_or_none(row.get("yearLow")),
-            yearHigh=number_or_none(row.get("yearHigh")),
-            marketCap=number_or_none(row.get("marketCap")),
-        )
-    except Exception as exc:
-        return MarketQuoteResponse(ticker=symbol, status="unavailable", provider="financialmodelingprep", message=short_error(exc))
+    if fmp_enabled():
+        try:
+            rows = fmp_get("/quote", {"symbol": symbol})
+            row = first_dict(rows)
+            if row:
+                return MarketQuoteResponse(
+                    ticker=symbol,
+                    status="ok",
+                    provider="financialmodelingprep",
+                    name=str(row.get("name") or symbol),
+                    price=number_or_none(row.get("price")),
+                    change=number_or_none(row.get("change")),
+                    changePercentage=number_or_none(row.get("changePercentage")),
+                    volume=number_or_none(row.get("volume")),
+                    dayLow=number_or_none(row.get("dayLow")),
+                    dayHigh=number_or_none(row.get("dayHigh")),
+                    yearLow=number_or_none(row.get("yearLow")),
+                    yearHigh=number_or_none(row.get("yearHigh")),
+                    marketCap=number_or_none(row.get("marketCap")),
+                )
+        except Exception:
+            pass
+    if alpha_enabled():
+        try:
+            row = alpha_global_quote(symbol)
+            if row:
+                pct_raw = str(row.get("10. change percent") or "").replace("%", "")
+                return MarketQuoteResponse(
+                    ticker=symbol,
+                    status="ok",
+                    provider="alpha_vantage",
+                    name=symbol,
+                    price=number_or_none(row.get("05. price")),
+                    change=number_or_none(row.get("09. change")),
+                    changePercentage=number_or_none(pct_raw),
+                    volume=number_or_none(row.get("06. volume")),
+                    dayLow=number_or_none(row.get("04. low")),
+                    dayHigh=number_or_none(row.get("03. high")),
+                    message="Alpha Vantage stock quote fallback. This is stock-level data, not an options chain.",
+                )
+        except Exception as exc:
+            return MarketQuoteResponse(ticker=symbol, status="unavailable", provider="alpha_vantage", message=short_error(exc))
+    return MarketQuoteResponse(
+        ticker=symbol,
+        status="needs_provider_key",
+        provider=settings.market_data_provider or "disabled",
+        message="No stock quote provider is configured. Add FMP or Alpha Vantage for stock-level quotes.",
+    )
 
 
 async def company_profile(ticker: str) -> CompanyProfileResponse:
@@ -262,6 +289,18 @@ async def earnings_calendar(ticker: str) -> EarningsResponse:
 async def options_context(ticker: str) -> OptionsContextResponse:
     symbol = clean_symbol(ticker)
     provider = settings.market_data_provider or "disabled"
+    if yfinance_enabled():
+        return OptionsContextResponse(
+            ticker=symbol,
+            status="delayed_options_enabled",
+            provider="yfinance_delayed",
+            fields_ready=READY_FIELDS + ["delayed_option_chain", "expiration_dates", "delayed_bid_ask", "delayed_implied_volatility", "delayed_volume_open_interest"],
+            fields_pending=["provider_reported_greeks", "real_time_opra_snapshot"],
+            message=(
+                "Delayed yfinance options are enabled. RiskWise can try to read expirations, bid/ask, IV, volume, and open interest, "
+                "but these are delayed/free-source values, not live OPRA data. Greeks are estimated only when enough inputs exist."
+            ),
+        )
     if polygon_enabled():
         expirations, _contracts = polygon_option_reference(symbol, limit=10)
         status = "options_reference_ready" if expirations else "options_provider_configured"
@@ -321,6 +360,18 @@ async def options_expirations(ticker: str) -> OptionsAvailabilityResponse:
                     "Live premium, IV, Greeks, and liquidity still require an option snapshot entitlement."
                 ),
             )
+    if yfinance_enabled():
+        expirations, contracts = yfinance_option_chain(symbol, limit=30)
+        if expirations:
+            return OptionsAvailabilityResponse(
+                ticker=symbol,
+                status="delayed_expirations_ready",
+                provider="yfinance_delayed",
+                expirations=expirations[:16],
+                contracts=contracts[:30],
+                quote=quote.model_dump(),
+                message="Delayed yfinance expirations are available. Treat them as delayed reference data, not live OPRA.",
+            )
     return OptionsAvailabilityResponse(
         ticker=symbol,
         status="estimated_calendar",
@@ -355,6 +406,24 @@ async def options_chain(ticker: str, expiration: str | None = None) -> OptionsAv
                 "premium, bid/ask, IV, Greeks, volume, and open interest are unavailable on the current entitlement and remain user-confirmed fields."
             ),
         )
+    if yfinance_enabled():
+        expirations, contracts = yfinance_option_chain(symbol, expiration=expiration, limit=140)
+        contracts = attach_estimated_greeks(contracts, quote.price)
+        if contracts:
+            return OptionsAvailabilityResponse(
+                ticker=symbol,
+                status="delayed_chain_ready",
+                provider="yfinance_delayed",
+                expirations=expirations[:16] if expirations else standard_monthly_expirations(),
+                contracts=contracts[:140],
+                quote=quote.model_dump(),
+                profile=profile.model_dump(),
+                earnings=[item.model_dump() for item in earnings.items],
+                message=(
+                    "RiskWise is using delayed yfinance options data for premium, bid/ask, IV, volume, and open interest where available. "
+                    "Greeks are RiskWise-estimated from Black-Scholes when inputs are sufficient, not provider-reported."
+                ),
+            )
     return OptionsAvailabilityResponse(
         ticker=symbol,
         status="requires_options_provider",
@@ -387,12 +456,16 @@ async def options_contract_context(
         expiration_rows, contracts = polygon_option_reference(symbol, expiration=expiration, option_type=option_type, limit=250)
         contracts = enrich_reference_contracts(contracts, quote.price)
         selected_contract = choose_contract_reference(contracts, expiration, strike, option_type)
+    elif yfinance_enabled():
+        expiration_rows, contracts = yfinance_option_chain(symbol, expiration=expiration, option_side=option_type, limit=120)
+        contracts = attach_estimated_greeks(contracts, quote.price)
+        selected_contract = choose_yfinance_contract(contracts, expiration, strike, option_type)
     selected: dict[str, Any] = {
         "symbol": symbol,
         "expiration": expiration or "",
         "strike": strike,
         "optionSide": option_type,
-        "source": "polygon_reference_plus_underlying_context" if selected_contract else "user_input_plus_underlying_context",
+        "source": str(selected_contract.get("source") or ("polygon_reference_plus_underlying_context" if selected_contract else "user_input_plus_underlying_context")),
         "underlyingPrice": quote.price,
         "providerHasLiveOptionChain": bool(selected_contract),
         "providerHasLivePremium": False,
@@ -408,7 +481,13 @@ async def options_contract_context(
     return OptionsAvailabilityResponse(
         ticker=symbol,
         status="reference_contract_matched" if selected_contract else "partial_contract_context",
-        provider="massive_polygon_reference+financialmodelingprep" if polygon_enabled() else "financialmodelingprep+riskwise_estimator",
+        provider=(
+            "massive_polygon_reference+financialmodelingprep"
+            if polygon_enabled()
+            else "yfinance_delayed+financialmodelingprep"
+            if yfinance_enabled()
+            else "financialmodelingprep+riskwise_estimator"
+        ),
         expirations=expiration_rows[:16] if expiration_rows else standard_monthly_expirations(),
         contracts=contracts[:30],
         selected=selected,
@@ -431,12 +510,241 @@ async def gather_contract_context(symbol: str):
     return quote, profile, earnings
 
 
+def market_provider_status() -> MarketProviderStatusResponse:
+    yfinance_error = yfinance_import_error() if settings.enable_yfinance_options else ""
+    yfinance_status = "active" if yfinance_enabled() else "dependency_error" if yfinance_error else "disabled"
+    yfinance_missing = [] if yfinance_enabled() else [yfinance_error or "Enable delayed yfinance options fallback"]
+    capabilities = [
+        MarketProviderCapability(
+            provider="financialmodelingprep",
+            configured=bool(settings.fmp_api_key),
+            status="active" if fmp_enabled() else "missing_key_or_disabled",
+            fields=["quote", "company_profile", "stock_news", "earnings"],
+            missing=[] if fmp_enabled() else ["FMP credentials or fmp/hybrid market mode"],
+            notes="Best current stock-level source for RiskWise. Free-plan quota can be limited.",
+        ),
+        MarketProviderCapability(
+            provider="massive_polygon_reference",
+            configured=bool(settings.polygon_api_key),
+            status="active" if polygon_enabled() else "missing_key_or_disabled",
+            fields=["option_contract_reference", "expiration_dates", "strike_ladder", "contract_symbols"],
+            missing=[] if polygon_enabled() else ["Massive/Polygon credentials or massive/polygon/hybrid market mode"],
+            notes="Reference contracts only unless the key has live snapshot entitlements.",
+        ),
+        MarketProviderCapability(
+            provider="yfinance_delayed",
+            configured=settings.enable_yfinance_options,
+            status=yfinance_status,
+            fields=["delayed_expirations", "delayed_chain", "bid_ask", "implied_volatility", "volume", "open_interest"],
+            missing=yfinance_missing,
+            notes="No-key delayed fallback. Useful for MVP context, not live OPRA redistribution.",
+        ),
+        MarketProviderCapability(
+            provider="alpha_vantage",
+            configured=bool(settings.alpha_vantage_api_key),
+            status="active" if alpha_enabled() else "missing_key_or_disabled",
+            fields=["stock_quote_fallback"],
+            missing=[] if alpha_enabled() else ["Alpha Vantage credentials"],
+            notes="Stock-level fallback only. Not used as the primary options source.",
+        ),
+        MarketProviderCapability(
+            provider="manual_upload",
+            configured=True,
+            status="active",
+            fields=["user_confirmed_contract", "broker_screenshot_metadata", "pasted_contract_text"],
+            missing=["OCR/vision extraction"],
+            notes="Best legal workaround for real contract context: the user supplies their own broker data.",
+        ),
+    ]
+    active = [item.provider for item in capabilities if item.status == "active"]
+    return MarketProviderStatusResponse(
+        status="active" if active else "degraded",
+        strategy="free_honest_stack",
+        capabilities=capabilities,
+        data_quality_labels=["Full", "Delayed", "Estimated", "Manual", "Reference-only", "Missing"],
+        message=(
+            "RiskWise prefers real provider data when configured, labels delayed/estimated/manual fields, "
+            "and never invents missing IV, Greeks, bid/ask, volume, or open interest."
+        ),
+    )
+
+
 def fmp_enabled() -> bool:
     return settings.market_data_provider in {"fmp", "polygon", "massive", "hybrid"} and bool(settings.fmp_api_key)
 
 
 def polygon_enabled() -> bool:
     return settings.market_data_provider in {"polygon", "massive", "hybrid"} and bool(settings.polygon_api_key)
+
+
+def alpha_enabled() -> bool:
+    return bool(settings.alpha_vantage_api_key)
+
+
+def yfinance_enabled() -> bool:
+    return bool(settings.enable_yfinance_options) and not yfinance_import_error()
+
+
+def yfinance_import_error() -> str:
+    global _YFINANCE_IMPORT_ERROR
+    if _YFINANCE_IMPORT_ERROR is False:
+        try:
+            import_module("yfinance")
+            _YFINANCE_IMPORT_ERROR = None
+        except Exception as exc:
+            text = " ".join(str(exc).split()) or exc.__class__.__name__
+            _YFINANCE_IMPORT_ERROR = f"yfinance import failed: {text[:180]}"
+    return str(_YFINANCE_IMPORT_ERROR or "")
+
+
+def alpha_global_quote(symbol: str) -> dict[str, Any]:
+    query = urllib.parse.urlencode({"function": "GLOBAL_QUOTE", "symbol": symbol, "apikey": settings.alpha_vantage_api_key})
+    request = urllib.request.Request(f"{ALPHA_VANTAGE_BASE}?{query}", headers={"User-Agent": "RiskWise-dev/1.0"})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    row = data.get("Global Quote") if isinstance(data, dict) else None
+    return row if isinstance(row, dict) else {}
+
+
+def yfinance_option_chain(
+    symbol: str,
+    *,
+    expiration: str | None = None,
+    option_side: str | None = None,
+    limit: int = 120,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    try:
+        import yfinance as yf  # type: ignore
+    except Exception:
+        return [], []
+    try:
+        ticker = yf.Ticker(symbol)
+        expirations = list(getattr(ticker, "options", []) or [])
+        if not expirations:
+            return [], []
+        selected_expiration = expiration if expiration in expirations else expirations[0]
+        chain = ticker.option_chain(selected_expiration)
+    except Exception:
+        return [], []
+    rows: list[dict[str, Any]] = []
+    for side_name, frame in [("call", getattr(chain, "calls", None)), ("put", getattr(chain, "puts", None))]:
+        if option_side and side_name != option_side:
+            continue
+        if frame is None:
+            continue
+        records = frame.head(max(1, min(limit, 500))).to_dict("records")
+        for row in records:
+            strike = number_or_none(row.get("strike"))
+            bid = number_or_none(row.get("bid"))
+            ask = number_or_none(row.get("ask"))
+            last = number_or_none(row.get("lastPrice"))
+            iv = number_or_none(row.get("impliedVolatility"))
+            rows.append(
+                {
+                    "contract_symbol": str(row.get("contractSymbol") or ""),
+                    "ticker": str(row.get("contractSymbol") or ""),
+                    "underlying_ticker": symbol,
+                    "contract_type": side_name,
+                    "optionSide": side_name,
+                    "expiration_date": selected_expiration,
+                    "strike_price": strike,
+                    "strike": strike,
+                    "last": last,
+                    "bid": bid,
+                    "ask": ask,
+                    "mid": mid_price(bid, ask, last),
+                    "implied_volatility": iv,
+                    "open_interest": int(number_or_none(row.get("openInterest")) or 0),
+                    "volume": int(number_or_none(row.get("volume")) or 0),
+                    "shares_per_contract": 100,
+                    "source": "yfinance_delayed",
+                    "has_live_quote": False,
+                    "data_quality": "Delayed",
+                }
+            )
+    return expirations, rows[:limit]
+
+
+def attach_estimated_greeks(contracts: list[dict[str, Any]], underlying_price: float | None) -> list[dict[str, Any]]:
+    if not underlying_price:
+        return contracts
+    today = date.today()
+    for contract in contracts:
+        strike = number_or_none(contract.get("strike_price") or contract.get("strike"))
+        iv = number_or_none(contract.get("implied_volatility"))
+        expiration = parse_date_value(contract.get("expiration_date"))
+        if not strike or not iv or not expiration:
+            continue
+        days = max(1, (expiration - today).days)
+        greeks = black_scholes_greeks(
+            underlying=float(underlying_price),
+            strike=float(strike),
+            days=days,
+            iv=iv,
+            option_side=str(contract.get("contract_type") or "call"),
+        )
+        if greeks:
+            contract["estimated_greeks"] = greeks
+            contract["greeks_source"] = "riskwise_black_scholes_estimate"
+    return contracts
+
+
+def black_scholes_greeks(underlying: float, strike: float, days: int, iv: float, option_side: str) -> dict[str, float]:
+    sigma = iv / 100 if iv > 3 else iv
+    if underlying <= 0 or strike <= 0 or sigma <= 0:
+        return {}
+    t = max(days / 365.0, 1 / 365)
+    r = 0.04
+    d1 = (math.log(underlying / strike) + (r + 0.5 * sigma * sigma) * t) / (sigma * math.sqrt(t))
+    d2 = d1 - sigma * math.sqrt(t)
+    pdf = math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi)
+    cdf = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
+    if option_side == "put":
+        delta = cdf(d1) - 1
+        theta = (-(underlying * pdf * sigma) / (2 * math.sqrt(t)) + r * strike * math.exp(-r * t) * cdf(-d2)) / 365
+    else:
+        delta = cdf(d1)
+        theta = (-(underlying * pdf * sigma) / (2 * math.sqrt(t)) - r * strike * math.exp(-r * t) * cdf(d2)) / 365
+    gamma = pdf / (underlying * sigma * math.sqrt(t))
+    vega = underlying * pdf * math.sqrt(t) / 100
+    return {
+        "delta": round(delta, 4),
+        "gamma": round(gamma, 4),
+        "theta": round(theta, 4),
+        "vega": round(vega, 4),
+    }
+
+
+def choose_yfinance_contract(
+    contracts: list[dict[str, Any]],
+    expiration: str | None,
+    strike: float | None,
+    option_type: str,
+) -> dict[str, Any]:
+    candidates = [
+        row
+        for row in contracts
+        if (not expiration or row.get("expiration_date") == expiration)
+        and (not option_type or row.get("contract_type") == option_type)
+    ]
+    if not candidates:
+        return {}
+    if strike is None:
+        return candidates[0]
+    return min(candidates, key=lambda row: abs(float(row.get("strike_price") or 0) - strike))
+
+
+def mid_price(bid: float | None, ask: float | None, last: float | None) -> float | None:
+    if bid is not None and ask is not None and ask >= bid and ask > 0:
+        return round((bid + ask) / 2, 4)
+    return last
+
+
+def parse_date_value(value: Any) -> date | None:
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 def standard_monthly_expirations(today: date | None = None, count: int = 8) -> list[str]:
@@ -757,7 +1065,8 @@ def number_or_none(value: Any) -> float | None:
     try:
         if value is None or value == "":
             return None
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except (TypeError, ValueError):
         return None
 

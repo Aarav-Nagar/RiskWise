@@ -148,6 +148,13 @@ class SavedCheckResponse(BaseModel):
     createdAt: str
 
 
+class SavedCheckExportResponse(BaseModel):
+    savedCheckId: str
+    generatedAt: str
+    filename: str
+    markdown: str
+
+
 class ChatRequest(BaseModel):
     user_id: str
     thread_id: str | None = None
@@ -155,12 +162,14 @@ class ChatRequest(BaseModel):
     current_report: dict[str, Any] | None = None
     user_profile: dict[str, Any] | None = None
     chat_mode: str = "Explain"
+    analysis_depth: str = Field(default="standard", pattern="^(quick|standard|deep_analysis)$")
     attachments: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
     thread_id: str
     answer: str
+    analysis_depth: str = "standard"
     mode: str = "fallback"
     summary_cards: list[dict[str, Any]] = Field(default_factory=list)
     visual_blocks: list[dict[str, Any]] = Field(default_factory=list)
@@ -169,9 +178,30 @@ class ChatResponse(BaseModel):
     missing_data: list[str] = Field(default_factory=list)
     risk_flags: list[str] = Field(default_factory=list)
     tools_used: list[dict[str, Any]] = Field(default_factory=list)
+    what_used: list[str] = Field(default_factory=list)
+    agent_docket: list[dict[str, Any]] = Field(default_factory=list)
+    normalized_context: dict[str, Any] = Field(default_factory=dict)
+    provider_status: dict[str, Any] = Field(default_factory=dict)
     provider: str = "fallback"
     model: str = "deterministic-options-coach"
     used_fallback: bool = True
+
+
+class ContractExtractionRequest(BaseModel):
+    user_id: str
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ContractExtractionResponse(BaseModel):
+    status: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+    missing_fields: list[str] = Field(default_factory=list)
+    missing_live_fields: list[str] = Field(default_factory=list)
+    confidence: float = 0.0
+    provider: str = "none"
+    model: str = ""
+    message: str
+    attachments: list[list[str]] = Field(default_factory=list)
 
 
 class ChatFeedbackRequest(BaseModel):
@@ -315,11 +345,35 @@ class OptionsAvailabilityResponse(BaseModel):
     message: str = ""
 
 
+class MarketProviderCapability(BaseModel):
+    provider: str
+    configured: bool
+    status: str
+    fields: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class MarketProviderStatusResponse(BaseModel):
+    status: str
+    strategy: str
+    capabilities: list[MarketProviderCapability]
+    data_quality_labels: list[str] = Field(default_factory=list)
+    message: str = ""
+
+
 class ProviderStatus(BaseModel):
     provider: str
     configured: bool
     model: str = ""
+    kind: str = ""
+    status: str = ""
     cooling_down: bool = False
+    cooldown_remaining_seconds: int = 0
+    last_latency_ms: int | None = None
+    last_success_at: str | None = None
+    last_failure_at: str | None = None
+    last_error: str = ""
 
 
 class ReadyResponse(BaseModel):
@@ -328,3 +382,4 @@ class ReadyResponse(BaseModel):
     storage: dict[str, Any]
     llm: list[ProviderStatus]
     market_data: dict[str, Any]
+    auth: dict[str, Any] = Field(default_factory=dict)

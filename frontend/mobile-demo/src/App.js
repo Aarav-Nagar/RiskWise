@@ -11,11 +11,19 @@ import { HomeScreen } from "./screens/HomeScreen";
 import { ProfileScreen } from "./screens/ProfileScreen";
 import { ReportScreen } from "./screens/ReportScreen";
 import { ChatScreen } from "./screens/ChatScreen";
-import { clearRiskWiseContext, deleteRiskWiseAccount, lookupProfileByEmail, requestPasswordReset, syncClerkProfile, updateProfileSettings } from "./services/authService";
-import { generateTradeCheck, listSavedChecks, saveCheck } from "./services/apiClient";
+import { clearRiskWiseContext, configureAuthService, deleteRiskWiseAccount, lookupProfileByEmail, requestPasswordReset, syncClerkProfile, updateProfileSettings } from "./services/authService";
+import { configureApiAuth, generateTradeCheck, listSavedChecks, saveCheck } from "./services/apiClient";
 
 export default function App() {
-  const { isLoaded, isSignedIn } = useAuth();
+  if (!hasClerkRuntime()) {
+    return <PreviewApp />;
+  }
+
+  return <ClerkApp />;
+}
+
+function ClerkApp() {
+  const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user: clerkUser } = useUser();
   const { signOut: clerkSignOut } = useClerk();
   const signUpState = useSignUp();
@@ -35,6 +43,11 @@ export default function App() {
   const [pendingVerification, setPendingVerification] = useState(null);
   const [pendingSignInVerification, setPendingSignInVerification] = useState(null);
   const [pendingPasswordReset, setPendingPasswordReset] = useState(null);
+
+  useEffect(() => {
+    configureApiAuth({ getToken });
+    configureAuthService({ getToken });
+  }, [getToken]);
 
   useEffect(() => {
     let mounted = true;
@@ -587,7 +600,7 @@ function createLocalRiskWiseUser({ email, profile = {}, clerkId, fallbackName = 
         />
       )}
       {activeTab === "Check" && (
-        <CheckScreen draft={draft} setDraft={setDraft} onCheck={handleTradeCheck} loading={loading} error={error} />
+        <CheckScreen user={currentUser} draft={draft} setDraft={setDraft} onCheck={handleTradeCheck} loading={loading} error={error} />
       )}
       {activeTab === "Coach" && <ChatScreen user={currentUser} currentReport={currentReport} savedChecks={savedChecks} navigate={setActiveTab} />}
       {activeTab === "Report" && (
@@ -605,6 +618,205 @@ function createLocalRiskWiseUser({ email, profile = {}, clerkId, fallbackName = 
       )}
     </AppShell>
   );
+}
+
+function PreviewApp() {
+  const [currentUser, setCurrentUser] = useState(createPreviewRiskWiseUser());
+  const [activeTab, setActiveTab] = useState("Home");
+  const [draft, setDraft] = useState(() => ({
+    ...tradeDraft,
+    user: "Aarav",
+    accountSize: 25000,
+    riskBudget: 500
+  }));
+  const [currentReport, setCurrentReport] = useState(null);
+  const [savedChecks, setSavedChecks] = useState([]);
+  const [saveStatus, setSaveStatus] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    listSavedChecks(currentUser)
+      .then((rows) => {
+        if (mounted) {
+          setSavedChecks(rows);
+        }
+      })
+      .catch(() => {
+        if (mounted) {
+          setSaveStatus("Saved checks are unavailable right now.");
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [currentUser?.id]);
+
+  async function handleTradeCheck(options = {}) {
+    setLoading(true);
+    setError("");
+    try {
+      const nextReport = await generateTradeCheck(draft, currentUser);
+      setCurrentReport(nextReport);
+      setSaveStatus("");
+      if (!options.stayOnCheck) {
+        setActiveTab("Report");
+      }
+      return nextReport;
+    } catch (err) {
+      const message = err?.message || "Could not generate this check. Try again.";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSaveCheck() {
+    if (!currentReport) {
+      return;
+    }
+    setSaveStatus("Saving...");
+    try {
+      const item = await saveCheck(currentUser, currentReport);
+      setSavedChecks((items) => [item, ...items.filter((existing) => existing.tradeCheckId !== item.tradeCheckId)].slice(0, 10));
+      setSaveStatus("Saved to your RiskWise account.");
+    } catch (err) {
+      const item = {
+        id: `preview-${Date.now()}`,
+        tradeCheckId: currentReport.id || `preview-check-${Date.now()}`,
+        ticker: currentReport.ticker,
+        strategy: currentReport.strategy || currentReport.tradeType,
+        savedAt: new Date().toISOString(),
+        report: currentReport
+      };
+      setSavedChecks((items) => [item, ...items].slice(0, 10));
+      setSaveStatus("Saved in preview mode.");
+    }
+  }
+
+  async function handleUpdateProfile(updates) {
+    const nextUser = deepMerge(currentUser, updates);
+    setCurrentUser(nextUser);
+    return nextUser;
+  }
+
+  async function handleClearProfileContext() {
+    const nextUser = {
+      ...currentUser,
+      savedContext: {
+        savedChecks: false,
+        chatHistory: false,
+        uploadedScreenshots: false,
+        watchlist: false
+      }
+    };
+    setCurrentUser(nextUser);
+    setSavedChecks([]);
+    setCurrentReport(null);
+    return nextUser;
+  }
+
+  async function handlePreviewPasswordReset() {
+    return {
+      email: maskEmail(currentUser.email),
+      message: "Preview mode: password reset is wired for real Clerk accounts."
+    };
+  }
+
+  async function handlePreviewDeleteAccount() {
+    setCurrentUser(createPreviewRiskWiseUser());
+    setCurrentReport(null);
+    setSavedChecks([]);
+    setSaveStatus("Preview account reset.");
+    setActiveTab("Home");
+  }
+
+  return (
+    <AppShell activeTab={activeTab} setActiveTab={setActiveTab}>
+      {activeTab === "Home" && (
+        <HomeScreen
+          user={currentUser}
+          draft={draft}
+          setDraft={setDraft}
+          report={currentReport}
+          savedChecks={savedChecks}
+          navigate={setActiveTab}
+          openSavedCheck={(item) => {
+            setCurrentReport(item.report || item);
+            setActiveTab("Report");
+          }}
+        />
+      )}
+      {activeTab === "Check" && (
+        <CheckScreen user={currentUser} draft={draft} setDraft={setDraft} onCheck={handleTradeCheck} loading={loading} error={error} />
+      )}
+      {activeTab === "Coach" && <ChatScreen user={currentUser} currentReport={currentReport} savedChecks={savedChecks} navigate={setActiveTab} />}
+      {activeTab === "Report" && (
+        <ReportScreen report={currentReport} onAskAi={() => setActiveTab("Coach")} onSave={handleSaveCheck} saveStatus={saveStatus} />
+      )}
+      {activeTab === "Profile" && (
+        <ProfileScreen
+          user={currentUser}
+          onSignOut={handlePreviewDeleteAccount}
+          onUpdateUser={handleUpdateProfile}
+          onClearContext={handleClearProfileContext}
+          onDeleteAccount={handlePreviewDeleteAccount}
+          onPasswordReset={handlePreviewPasswordReset}
+        />
+      )}
+    </AppShell>
+  );
+}
+
+function createPreviewRiskWiseUser() {
+  return {
+    id: "preview-user",
+    clerkId: "preview-local",
+    name: "Aarav Preview",
+    email: "preview@riskwise.local",
+    accountSize: 25000,
+    riskBudgetPercent: 2,
+    experienceLevel: "Some experience",
+    riskStyle: "Balanced",
+    sectors: ["Technology", "Healthcare", "Finance"],
+    marketCaps: ["Large cap", "Mega cap"],
+    aiMemory: {
+      experienceLevel: "Some experience",
+      riskStyle: "Balanced",
+      preferredExplanation: "Step-by-step",
+      commonMistakes: ["Oversizing", "Chasing", "Ignoring IV"]
+    },
+    riskRules: {
+      maxRiskPerTrade: 2,
+      maxTradesPerWeek: 5,
+      avoidEarningsTrades: true,
+      warnExpirationUnderDays: 7,
+      premiumRiskWarning: 5
+    },
+    coachStyle: {
+      defaultMode: "Review",
+      explanationStyle: "Step-by-step",
+      coachingApproach: "Debate both sides",
+      questionStyle: "Ask me questions first",
+      riskStrictness: "Strict about risk"
+    },
+    savedContext: {
+      savedChecks: true,
+      chatHistory: true,
+      uploadedScreenshots: true,
+      watchlist: true
+    },
+    appPreferences: {
+      defaultAiMode: "Review",
+      openAppTo: "Coach",
+      compactReportCards: true,
+      weeklyDigest: true,
+      quietHours: "After 9 PM"
+    },
+    syncMode: "preview"
+  };
 }
 
 function firstName(name) {
@@ -662,6 +874,10 @@ function isLocalPreviewSession() {
 
 function isPreviewUser(user) {
   return user?.id === "preview-user" || user?.clerkId === "preview-local";
+}
+
+function hasClerkRuntime() {
+  return Boolean(process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY);
 }
 
 function deepMerge(base, patch) {
