@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-06-30
+
+- Temporarily limited actionable Check strategies to single-leg long calls and long puts until a real multi-leg `legs[]` model exists.
+- Removed spread, cash-secured put, and covered-call suggestions from the stock-idea path so short/income structures are not mapped into long-option math.
+- Added backend rejection for spreads, covered calls, cash-secured puts, short-option structures, and other unsupported multi-leg strategies.
+- Added `risk_budget_percent` to trade-check requests so backend sizing warnings use the user's profile rule instead of a hard-coded 2%.
+- Updated medium-horizon handling so `1-3 Months` is recognized as a 45-day planned hold instead of falling back to nine days.
+- Made backend required-move math use actual underlying-to-breakeven distance when an underlying price is available, with a labeled heuristic fallback only when missing.
+- Reframed synthetic report visuals from confidence/consensus/outcome language to rule coverage, evidence completeness, data availability, and unresolved-risk language.
+
 ## 2026-06-29
 
 - Hardened production backend auth around Clerk session JWTs, bearer-token verification, and per-user ownership checks.

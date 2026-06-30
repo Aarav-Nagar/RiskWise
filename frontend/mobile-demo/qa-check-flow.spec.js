@@ -101,6 +101,10 @@ test("stock idea flow suggests strategies before contract details", async ({ pag
   await expect(page.getByText("Risk Tolerance")).toBeVisible();
   await page.getByText("Continue").click();
   await expect(page.getByText("Suggested Strategies")).toBeVisible();
+  await expect(page.getByText("Long Call")).toBeVisible();
+  await expect(page.getByText("Bull Call Spread")).toHaveCount(0);
+  await expect(page.getByText("Cash Secured Put")).toHaveCount(0);
+  await expect(page.getByText("Covered Call")).toHaveCount(0);
   await expect(page.getByText("Explore Strategy").first()).toBeVisible();
 });
 

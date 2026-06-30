@@ -258,16 +258,16 @@ function buildTradeCheckResponse(body) {
       ["Risk Review", "warn"]
     ],
     agents: [
-      ["Risk-Managed", 72, "good"],
-      ["Neutral", 64, "good"],
-      ["Aggressive", 49, "risk"]
+      ["Rule Coverage", 72, "good"],
+      ["Evidence Completeness", 64, "good"],
+      ["Unresolved Risk", 49, "risk"]
     ],
     scenarios: [
-      ["Bear Case", "-50%", `-$${Math.round(maxLoss * 0.5)}`, "risk"],
-      ["Base Case", "+15%", `+$${Math.round(maxLoss * 0.15)}`, "good"],
-      ["Bull Case", "+75%", `+$${Math.round(maxLoss * 0.75)}`, "good"]
+      ["Premium stress", "-50%", `-$${Math.round(maxLoss * 0.5)}`, "risk"],
+      ["Small recovery", "+15%", `+$${Math.round(maxLoss * 0.15)}`, "good"],
+      ["Upside sketch", "+75%", `+$${Math.round(maxLoss * 0.75)}`, "good"]
     ],
-    overall_read: "Mixed evidence; missing live contract data limits confidence",
+    overall_read: "Mixed evidence; missing live contract data limits coverage",
     weakest_link: "Liquidity Context",
     risk_posture: "Mixed",
     decision_snapshot: {
@@ -275,6 +275,7 @@ function buildTradeCheckResponse(body) {
       options_structure: 56,
       risk_budget_used: 2,
       profile_risk_limit: 2,
+      review_gap: "Medium",
       agent_disagreement: "Medium",
       review_status: "Needs Review",
       calendar_days_to_expiration: 35,
@@ -291,7 +292,10 @@ function buildTradeCheckResponse(body) {
       max_loss: maxLoss,
       half_premium_drawdown: -Math.round(maxLoss * 0.5),
       amount_above_profile: 0,
+      breakeven: strike + premium,
+      breakeven_price: strike + premium,
       required_move_to_breakeven_pct: 4.2,
+      required_move_basis: "underlying_to_breakeven",
       trading_days_left: 25,
       calendar_days_left: 35,
       planned_hold_days: 9,

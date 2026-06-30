@@ -18,15 +18,17 @@ def parse_expiration_date(value: str) -> date | None:
 
 def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
     ticker = request.ticker.upper().strip()
-    is_option = "Option" in request.trade_type
+    if not is_supported_long_option(request.trade_type):
+        raise ValueError("RiskWise currently supports only single-leg long calls and long puts. Spreads, covered calls, cash-secured puts, and short-option structures need a multi-leg model before scoring.")
+    is_option = True
     option_side = normalize_option_side(request.option_side, request.trade_type)
     premium = float(request.premium or 0)
     contracts = int(request.contracts or 1)
     if is_option:
         if request.strike <= 0:
             raise ValueError("Strike must be greater than zero for an option check.")
-        if premium < 0:
-            raise ValueError("Premium cannot be negative.")
+        if premium <= 0:
+            raise ValueError("Premium must be greater than zero for a long option check.")
         if contracts < 1:
             raise ValueError("Contracts must be at least 1.")
         if request.bid is not None and request.ask is not None and request.bid > request.ask:
@@ -42,14 +44,9 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
         raise ValueError("Choose a valid future expiration date.")
     calendar_days = max(0, (expiration_date - date.today()).days)
     expiration_trading_days = max(1, round(calendar_days * 5 / 7))
-    selected_hold_days = {"Intraday": 1, "1-3 Days": 3, "1-2 Weeks": 9, "1 Month+": 22}.get(request.timeframe, 9)
+    selected_hold_days = planned_hold_days(request.timeframe)
     option_risk = 1.0 if is_option else 0.4
-    timeframe_adjustment = {
-        "Intraday": 0.9,
-        "1-3 Days": 0.7,
-        "1-2 Weeks": 0.45,
-        "1 Month+": 0.35,
-    }.get(request.timeframe, 0.55)
+    timeframe_adjustment = timeframe_risk_adjustment(request.timeframe)
     expiry_pressure = 1.2 if expiration_trading_days <= 3 else 0.8 if expiration_trading_days <= 7 else 0.45 if expiration_trading_days <= 15 else 0.2
 
     risk_score = min(9.4, round(2.4 + risk_percent * 0.75 + option_risk + timeframe_adjustment + expiry_pressure, 1))
@@ -58,17 +55,21 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
     behavior_score = max(38, min(84, round(76 - max(0, risk_percent - 1.0) * 7)))
     market_context = max(45, min(78, round(64 + (setup_score - 65) * 0.2)))
     agent_agreement = max(52, min(88, round(setup_score + 8 - risk_score * 2.2)))
-    profile_limit = 2.0
+    profile_limit = float(request.risk_budget_percent or 2.0)
     amount_above_profile = max(0.0, request.amount_at_risk - request.account_size * profile_limit / 100)
-    required_move = round(2.4 + risk_score * 0.42 + timeframe_adjustment * 1.2 + max(0, 10 - expiration_trading_days) * 0.18, 1)
+    heuristic_required_move = round(2.4 + risk_score * 0.42 + timeframe_adjustment * 1.2 + max(0, 10 - expiration_trading_days) * 0.18, 1)
     trading_days = expiration_trading_days
     hold_vs_expiration = "Too tight" if selected_hold_days >= trading_days else "Room available" if trading_days - selected_hold_days >= 5 else "Tight"
     if is_option and premium:
         breakeven = round(request.strike + premium, 2) if option_side == "call" else round(request.strike - premium, 2)
         breakeven_basis = "premium"
     else:
-        breakeven = round(request.strike * (1 + required_move / 100), 2) if option_side == "call" else round(request.strike * (1 - required_move / 100), 2)
+        breakeven = round(request.strike * (1 + heuristic_required_move / 100), 2) if option_side == "call" else round(request.strike * (1 - heuristic_required_move / 100), 2)
         breakeven_basis = "modeled_move"
+    required_move, required_move_basis = required_move_to_breakeven(request.underlying_price, breakeven, option_side)
+    if required_move is None:
+        required_move = heuristic_required_move
+        required_move_basis = "riskwise_heuristic_missing_underlying"
     mid_price = midpoint(request.bid, request.ask)
     spread_pct = round(((request.ask or 0) - (request.bid or 0)) / mid_price * 100, 1) if mid_price else None
     liquidity_risk = "Unknown"
@@ -132,17 +133,17 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
             ["Trend Context", "good" if setup_score >= 65 else "warn"],
             ["Volatility Context", "good" if risk_score <= 6 else "warn"],
             ["Sizing Discipline", "good" if risk_percent <= 2 else "warn"],
-            ["Risk Review", "warn" if risk_percent > 2 else "good"],
+        ["Risk Review", "warn" if risk_percent > profile_limit else "good"],
         ],
         agents=[
-            ["Risk-Managed", min(92, agent_agreement + 10), "good"],
-            ["Neutral", agent_agreement, "good"],
-            ["Aggressive", max(45, agent_agreement - 18), "risk"],
+            ["Rule Coverage", min(92, agent_agreement + 10), "good"],
+            ["Evidence Completeness", agent_agreement, "good"],
+            ["Unresolved Risk", max(45, agent_agreement - 18), "risk"],
         ],
         scenarios=[
-            ["Bear Case", "-50%", f"-${request.amount_at_risk * 0.5:.0f}", "risk"],
-            ["Base Case", "+15%", f"+${request.amount_at_risk * 0.15:.0f}", "good"],
-            ["Bull Case", "+75%", f"+${request.amount_at_risk * 0.75:.0f}", "good"],
+            ["Premium stress", "-50%", f"-${request.amount_at_risk * 0.5:.0f}", "risk"],
+            ["Small recovery", "+15%", f"+${request.amount_at_risk * 0.15:.0f}", "good"],
+            ["Upside sketch", "+75%", f"+${request.amount_at_risk * 0.75:.0f}", "good"],
         ],
         overall_read=overall_read,
         weakest_link=weakest_link,
@@ -152,6 +153,7 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
             "options_structure": options_structure,
             "risk_budget_used": round(risk_percent, 2),
             "profile_risk_limit": profile_limit,
+            "review_gap": "High" if agent_agreement < 62 else "Medium" if agent_agreement < 78 else "Low",
             "agent_disagreement": "High" if agent_agreement < 62 else "Medium" if agent_agreement < 78 else "Low",
             "review_status": badge,
             "calendar_days_to_expiration": calendar_days,
@@ -166,9 +168,12 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
         risk_math={
             "capital_at_risk": round(request.amount_at_risk, 2),
             "max_loss": round(request.amount_at_risk, 2),
+            "breakeven": breakeven,
+            "breakeven_price": breakeven,
             "half_premium_drawdown": -round(request.amount_at_risk * 0.5, 2),
             "amount_above_profile": round(amount_above_profile, 2),
             "required_move_to_breakeven_pct": required_move,
+            "required_move_basis": required_move_basis,
             "trading_days_left": trading_days,
             "calendar_days_left": calendar_days,
             "planned_hold_days": selected_hold_days,
@@ -221,8 +226,8 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
                 "score": max(35, min(90, round((setup_score + options_structure + behavior_score + market_context) / 4))),
                 "read": "Reduce size" if risk_percent > profile_limit else "Plan first",
                 "focus": "What should slow the user down before committing?",
-                "evidence": f"The main tension is {weakest_link.lower()}. Agreement is {agent_agreement}/100 because the setup score, option structure, and sizing score do not all say the same thing.",
-                "why_it_matters": "A useful risk review should expose disagreement. If every agent sounds confident, the app is probably hiding uncertainty.",
+                "evidence": f"The main tension is {weakest_link.lower()}. Evidence coverage is {agent_agreement}/100 because setup, option structure, and sizing checks do not all point equally cleanly.",
+                "why_it_matters": "A useful risk review should expose unresolved evidence. If every panel looks certain, the app is probably hiding uncertainty.",
                 "next_question": "What is the plan if the option drops 50% before the stock thesis is clearly invalidated?",
             },
         ],
@@ -304,6 +309,48 @@ def normalize_option_side(option_side: str | None, trade_type: str) -> str:
     if clean in {"call", "put"}:
         return clean
     return "put" if "Put" in trade_type else "call"
+
+
+def is_supported_long_option(trade_type: str) -> bool:
+    lower = str(trade_type or "").lower()
+    unsupported = ["spread", "covered", "cash", "secured", "short", "credit", "debit", "calendar", "diagonal", "condor", "straddle", "strangle"]
+    if any(term in lower for term in unsupported):
+        return False
+    has_side = "call" in lower or "put" in lower
+    has_long = "long" in lower or "(long)" in lower or "option" in lower
+    return has_side and has_long
+
+
+def planned_hold_days(timeframe: str) -> int:
+    return {
+        "Intraday": 1,
+        "1-3 Days": 3,
+        "1-2 Weeks": 9,
+        "1-3 Months": 45,
+        "1 Month+": 45,
+        "3+ Months": 75,
+    }.get(str(timeframe or "").strip(), 9)
+
+
+def timeframe_risk_adjustment(timeframe: str) -> float:
+    return {
+        "Intraday": 0.9,
+        "1-3 Days": 0.7,
+        "1-2 Weeks": 0.45,
+        "1-3 Months": 0.3,
+        "1 Month+": 0.3,
+        "3+ Months": 0.22,
+    }.get(str(timeframe or "").strip(), 0.55)
+
+
+def required_move_to_breakeven(underlying_price: float | None, breakeven: float, option_side: str) -> tuple[float | None, str]:
+    if not underlying_price or underlying_price <= 0 or breakeven <= 0:
+        return None, "missing_underlying"
+    if option_side == "put":
+        move = max(0.0, (underlying_price - breakeven) / underlying_price * 100)
+    else:
+        move = max(0.0, (breakeven - underlying_price) / underlying_price * 100)
+    return round(move, 2), "underlying_to_breakeven"
 
 
 def midpoint(bid: float | None, ask: float | None) -> float | None:

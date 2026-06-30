@@ -97,6 +97,7 @@ class TradeCheckRequest(BaseModel):
     amount_at_risk: float = Field(gt=0)
     timeframe: str
     account_size: float = Field(gt=0)
+    risk_budget_percent: float = Field(gt=0, le=25, default=2)
 
 
 class TradeCheckResponse(BaseModel):

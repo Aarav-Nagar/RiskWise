@@ -161,6 +161,84 @@ def test_trade_check_rejects_impossible_bid_ask() -> None:
     assert "ask" in response.json()["detail"].lower()
 
 
+def test_trade_check_rejects_unsupported_spreads_and_income_structures() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    for trade_type in ["Call Option Spread", "Put Option Spread", "Cash Secured Put", "Covered Call"]:
+        response = client.post(
+            "/trade-check",
+            json={
+                "user_id": "test_user",
+                "ticker": "AAPL",
+                "trade_type": trade_type,
+                "strike": 190,
+                "expiration": expiration,
+                "premium": 2.15,
+                "contracts": 1,
+                "amount_at_risk": 215,
+                "timeframe": "1-2 Weeks",
+                "account_size": 25000,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "single-leg long calls and long puts" in response.json()["detail"]
+
+
+def test_trade_check_uses_profile_risk_budget_and_medium_horizon() -> None:
+    expiration = (date.today() + timedelta(days=95)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Call Option (Long)",
+            "option_side": "call",
+            "strike": 205,
+            "expiration": expiration,
+            "premium": 2.5,
+            "contracts": 1,
+            "amount_at_risk": 250,
+            "timeframe": "1-3 Months",
+            "account_size": 25000,
+            "risk_budget_percent": 1,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision_snapshot"]["profile_risk_limit"] == 1
+    assert body["risk_math"]["planned_hold_days"] == 45
+    assert body["risk_math"]["dollars_until_profile_limit"] == 0
+
+
+def test_trade_check_required_move_uses_underlying_to_breakeven() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Call Option (Long)",
+            "option_side": "call",
+            "strike": 200,
+            "expiration": expiration,
+            "premium": 5,
+            "contracts": 1,
+            "underlying_price": 195,
+            "amount_at_risk": 500,
+            "timeframe": "1-2 Weeks",
+            "account_size": 25000,
+            "risk_budget_percent": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk_math"]["breakeven"] == 205
+    assert body["risk_math"]["required_move_to_breakeven_pct"] == 5.13
+    assert body["risk_math"]["required_move_basis"] == "underlying_to_breakeven"
+
+
 def test_trade_check_returns_expiration_aware_agent_detail() -> None:
     expiration = (date.today() + timedelta(days=45)).isoformat()
     response = client.post(
@@ -171,7 +249,9 @@ def test_trade_check_returns_expiration_aware_agent_detail() -> None:
             "trade_type": "Call Option (Long)",
             "strike": 190,
             "expiration": expiration,
-            "amount_at_risk": 500,
+            "premium": 2.5,
+            "contracts": 1,
+            "amount_at_risk": 250,
             "timeframe": "1-2 Weeks",
             "account_size": 25000,
         },

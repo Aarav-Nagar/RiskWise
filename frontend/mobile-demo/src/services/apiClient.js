@@ -26,7 +26,8 @@ export async function generateTradeCheck(draft, user) {
     underlying_price: nullableNumber(draft.underlyingPrice),
     amount_at_risk: Number(draft.amountAtRisk || 0),
     timeframe: draft.timeframe,
-    account_size: Number(draft.accountSize || 0)
+    account_size: Number(draft.accountSize || 0),
+    risk_budget_percent: riskBudgetPercent(draft)
   }, user);
   return normalizeBackendReport(data, draft);
 }
@@ -302,6 +303,15 @@ function nullableNumber(value) {
 function nullableInteger(value) {
   const number = parseInt(String(value ?? "").replace(/[^0-9]/g, ""), 10);
   return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function riskBudgetPercent(draft) {
+  const accountSize = Number(draft?.accountSize || 0);
+  const riskBudget = Number(draft?.riskBudget || 0);
+  if (accountSize > 0 && riskBudget > 0) {
+    return Math.max(0.1, Math.min(25, Math.round((riskBudget / accountSize) * 1000) / 10));
+  }
+  return Number(draft?.riskBudgetPercent || 2) || 2;
 }
 
 function formatApiError(data, response, fallback) {

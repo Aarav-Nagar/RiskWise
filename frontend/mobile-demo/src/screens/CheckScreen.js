@@ -72,9 +72,7 @@ const directions = [
 
 const optionStructures = [
   ["call", "Call", "Right to buy"],
-  ["put", "Put", "Right to sell"],
-  ["call_spread", "Call Spread", "Buy a call, sell a call"],
-  ["put_spread", "Put Spread", "Buy a put, sell a put"]
+  ["put", "Put", "Right to sell"]
 ];
 
 const horizons = [
@@ -1509,10 +1507,18 @@ function validateOptionContract(draft, selectedTicker, calculations) {
     openInterest: hasText(draft.openInterest) && Number(draft.openInterest) < 0 ? "Open interest cannot be negative." : "",
     contractVolume: hasText(draft.contractVolume) && Number(draft.contractVolume) < 0 ? "Volume cannot be negative." : "",
     accountSize: accountSize > 0 ? "" : "Account size must be greater than zero.",
-    riskRule: rawRiskRule > 0 && rawRiskRule <= 25 ? "" : "Risk rule must be above 0% and no more than 25%."
+    riskRule: rawRiskRule > 0 && rawRiskRule <= 25 ? "" : "Risk rule must be above 0% and no more than 25%.",
+    structure: isSupportedLongStructure(draft.structure || draft.optionSide || draft.tradeType) ? "" : "RiskWise v1 only supports single-leg long calls and long puts."
   };
   Object.values(validation).forEach((message) => message && messages.push(message));
   return { ...validation, messages, ready: messages.length === 0 };
+}
+
+function isSupportedLongStructure(value) {
+  const lower = String(value || "").toLowerCase();
+  if (["call", "put"].includes(lower)) return true;
+  if (["call option (long)", "put option (long)", "long call", "long put"].includes(lower)) return true;
+  return false;
 }
 
 function bidAskValidationMessage(bidProvided, askProvided, bid, ask) {
@@ -1635,7 +1641,7 @@ function buildLocalResult(report, draft, selectedTicker, calculations) {
         ? ["Bid/ask spread is missing or unclear.", "Open interest and volume may be unknown.", "IV context is not confirmed."]
         : [`Account risk is ${calculations.accountRiskPercent.toFixed(2)}%.`, `Your rule is ${rule}% max risk per trade.`, "Sizing should be decided before conviction."],
       why: weakest === "Liquidity Context" ? "Options can look attractive but become hard to exit when liquidity is weak." : "A good thesis can still hurt the account if the premium risk is too large.",
-      whatHelps: weakest === "Liquidity Context" ? ["Add bid and ask", "Check open interest above 1,000", "Compare IV to normal levels"] : ["Reduce contracts", "Lower premium at risk", "Use a spread to define risk"],
+      whatHelps: weakest === "Liquidity Context" ? ["Add bid and ask", "Check open interest above 1,000", "Compare IV to normal levels"] : ["Reduce contracts", "Lower premium at risk", "Wait for a cheaper long option"],
       nextQuestion: weakest === "Liquidity Context" ? "Is this contract liquid enough to enter and exit cleanly?" : "What position size keeps the trade survivable if it expires worthless?"
     },
     {
@@ -1671,44 +1677,22 @@ function buildLocalResult(report, draft, selectedTicker, calculations) {
 }
 
 function buildStrategies(direction, riskTolerance, horizon) {
-  const bullish = direction !== "bearish";
   const aggressive = riskTolerance === "aggressive";
   const premiumBase = horizon === "short" ? 2.15 : horizon === "medium" ? 4.2 : 6.5;
-  return [
-    {
-      name: bullish ? "Long Call" : "Long Put",
-      structure: bullish ? "call" : "put",
-      direction,
-      why: "Best for strong directional moves where the thesis needs convex upside.",
-      maxProfit: bullish ? "High / uncapped" : "High until stock approaches zero",
-      maxLoss: "Premium paid",
-      risk: aggressive ? "Aggressive" : "Most Direct",
-      tone: aggressive ? "warn" : "good",
-      premium: premiumBase
-    },
-    {
-      name: bullish ? "Bull Call Spread" : "Bear Put Spread",
-      structure: bullish ? "call_spread" : "put_spread",
-      direction,
-      why: "Best for a moderate move where lower premium risk matters more than unlimited upside.",
-      maxProfit: "Limited",
-      maxLoss: "Defined",
-      risk: "Balanced",
-      tone: "good",
-      premium: Math.max(1.15, premiumBase * 0.55).toFixed(2)
-    },
-    {
-      name: bullish ? "Cash Secured Put" : "Covered Call",
-      structure: bullish ? "put" : "call",
-      direction: bullish ? "neutral" : "neutral",
-      why: "Best for income-style thinking, but only if assignment risk is understood.",
-      maxProfit: "Premium received",
-      maxLoss: bullish ? "Stock purchase risk" : "Opportunity cost / stock downside",
-      risk: "Conservative",
-      tone: "neutral",
-      premium: Math.max(0.85, premiumBase * 0.35).toFixed(2)
-    }
-  ];
+  const choices = direction === "bearish" ? ["put"] : direction === "bullish" ? ["call"] : ["call", "put"];
+  return choices.map((structure) => ({
+    name: structure === "put" ? "Long Put" : "Long Call",
+    structure,
+    direction: structure === "put" ? "bearish" : "bullish",
+    why: structure === "put"
+      ? "Supported v1 structure for a directional downside thesis. Max loss is the premium paid."
+      : "Supported v1 structure for a directional upside thesis. Max loss is the premium paid.",
+    maxProfit: structure === "put" ? "High until stock approaches zero" : "High / uncapped",
+    maxLoss: "Premium paid",
+    risk: aggressive ? "Aggressive" : "Single-leg v1",
+    tone: aggressive ? "warn" : "good",
+    premium: premiumBase
+  }));
 }
 
 function buildSearchResults(query, remoteRows = []) {
@@ -1743,8 +1727,6 @@ function symbolToItem(symbol, name, exchange) {
 
 function tradeTypeFromStructure(structure) {
   if (structure === "put") return "Put Option (Long)";
-  if (structure === "call_spread") return "Call Option Spread";
-  if (structure === "put_spread") return "Put Option Spread";
   return "Call Option (Long)";
 }
 
