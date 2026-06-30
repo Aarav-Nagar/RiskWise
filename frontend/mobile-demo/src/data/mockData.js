@@ -43,14 +43,14 @@ export const baseReport = {
     ["Risk / Reward", "warn"]
   ],
   agents: [
-    ["Risk-Managed", 85, "good"],
-    ["Neutral", 70, "good"],
-    ["Aggressive", 60, "risk"]
+    ["Rule Coverage", 85, "good"],
+    ["Evidence Completeness", 70, "good"],
+    ["Unresolved Risk", 60, "risk"]
   ],
   scenarios: [
-    ["Bear Case", "-52%", "-$260", "risk"],
-    ["Base Case", "+18%", "+$90", "good"],
-    ["Bull Case", "+85%", "+$425", "good"]
+    ["Premium stress", "-52%", "-$260", "risk"],
+    ["Small recovery", "+18%", "+$90", "good"],
+    ["Upside sketch", "+85%", "+$425", "good"]
   ],
   contractLabel: {
     max_loss: 500,

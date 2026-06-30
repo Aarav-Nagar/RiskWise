@@ -78,6 +78,39 @@ class ForgotPasswordResponse(BaseModel):
     message: str
 
 
+class TradeThesis(BaseModel):
+    direction: str | None = None
+    target_price_low: float | None = Field(default=None, ge=0)
+    target_price_high: float | None = Field(default=None, ge=0)
+    target_date: str | None = None
+    catalyst: str | None = Field(default=None, max_length=500)
+    invalidation: str | None = Field(default=None, max_length=500)
+    confidence: float | None = Field(default=None, ge=0, le=100)
+    maximum_loss: float | None = Field(default=None, ge=0)
+    intended_hold_period: str | None = None
+
+
+class OptionGreeks(BaseModel):
+    delta: float | None = None
+    gamma: float | None = None
+    theta: float | None = None
+    vega: float | None = None
+    rho: float | None = None
+
+
+class OptionLeg(BaseModel):
+    action: str = Field(pattern="^(buy|sell)$")
+    type: str = Field(pattern="^(call|put)$")
+    strike: float = Field(gt=0)
+    expiration: str
+    quantity: int = Field(gt=0, le=1000)
+    bid: float | None = Field(default=None, ge=0)
+    ask: float | None = Field(default=None, ge=0)
+    premium: float | None = Field(default=None, ge=0)
+    iv: float | None = Field(default=None, ge=0)
+    greeks: OptionGreeks | None = None
+
+
 class TradeCheckRequest(BaseModel):
     user_id: str | None = None
     ticker: str = Field(min_length=1, max_length=12)
@@ -98,6 +131,8 @@ class TradeCheckRequest(BaseModel):
     timeframe: str
     account_size: float = Field(gt=0)
     risk_budget_percent: float = Field(gt=0, le=25, default=2)
+    trade_thesis: TradeThesis | None = None
+    option_legs: list[OptionLeg] = Field(default_factory=list)
 
 
 class TradeCheckResponse(BaseModel):

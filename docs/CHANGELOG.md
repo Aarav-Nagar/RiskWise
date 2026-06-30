@@ -9,6 +9,10 @@
 - Updated medium-horizon handling so `1-3 Months` is recognized as a 45-day planned hold instead of falling back to nine days.
 - Made backend required-move math use actual underlying-to-breakeven distance when an underlying price is available, with a labeled heuristic fallback only when missing.
 - Reframed synthetic report visuals from confidence/consensus/outcome language to rule coverage, evidence completeness, data availability, and unresolved-risk language.
+- Added backend `TradeThesis`, `OptionLeg`, and `OptionGreeks` request models so checks can carry thesis and leg-shaped data before multi-leg scoring is enabled.
+- Added frontend trade-check payload builders for `trade_thesis` and `option_legs`, preserving user-confirmed fields and provider/manual Greeks without inventing missing values.
+- Removed invented strategy premiums and fake amount-at-risk defaults from stock-idea strategy cards; users now must confirm premium and sizing before analysis.
+- Changed the Check investigation result summary to project backend `riskMath`, `decisionSnapshot`, and `agentDocket` instead of recalculating report math on the frontend.
 
 ## 2026-06-29
 

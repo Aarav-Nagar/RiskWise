@@ -251,14 +251,14 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
       expiration: nextExpiration,
       expirationSource: "strategy_estimate",
       strike: String(strike),
-      premium: String(strategy.premium),
+      premium: "",
       bid: "",
       ask: "",
       impliedVolatility: "",
       openInterest: "",
       contractVolume: "",
       contracts: "1",
-      amountAtRisk: String(Math.round(Number(strategy.premium) * 100)),
+      amountAtRisk: "",
       timeframe: horizonToTimeframe(draft.timeHorizon || "medium")
     });
     setFlow("option");
@@ -290,7 +290,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
     try {
       const report = await onCheck({ stayOnCheck: true });
       setRunningProgress(100);
-      setLocalReport(buildLocalResult(report, draft, selectedTicker, calculations));
+      setLocalReport(buildBackendResult(report, draft, selectedTicker));
       setTimeout(() => setFlow("results"), 250);
     } catch {
       if (flow === "screenshot") {
@@ -553,7 +553,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
     return (
       <ScreenScroll>
         <InvestigationResults
-          result={localReport || buildLocalResult(null, draft, selectedTicker, calculations)}
+          result={localReport || buildBackendResult(null, draft, selectedTicker)}
           onBack={() => chooseFlow("start")}
           onDebate={() => setFlow("debate")}
           onIssue={() => setFlow("issue")}
@@ -565,7 +565,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
   if (flow === "debate") {
     return (
       <ScreenScroll>
-        <CommitteeResults result={localReport || buildLocalResult(null, draft, selectedTicker, calculations)} onBack={() => setFlow("results")} />
+        <CommitteeResults result={localReport || buildBackendResult(null, draft, selectedTicker)} onBack={() => setFlow("results")} />
       </ScreenScroll>
     );
   }
@@ -573,7 +573,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
   if (flow === "issue") {
     return (
       <ScreenScroll>
-        <IssueDeepDive result={localReport || buildLocalResult(null, draft, selectedTicker, calculations)} onBack={() => setFlow("results")} />
+        <IssueDeepDive result={localReport || buildBackendResult(null, draft, selectedTicker)} onBack={() => setFlow("results")} />
       </ScreenScroll>
     );
   }
@@ -895,6 +895,7 @@ function SizeStep({ draft, calculations, validation, setNumericField, setMaxRisk
       <FieldRow label="Account Size" value={String(draft.accountSize || "")} onChangeText={(value) => setNumericField("accountSize", value)} prefix="$" error={validation.accountSize} />
       <FieldRow label="Max Risk Rule" value={String(riskRulePercent(draft))} onChangeText={setMaxRiskRule} suffix="%" error={validation.riskRule} />
       <Card style={styles.mathCard}>
+        <Text style={styles.helperText}>Local estimate for form review only. Backend math is authoritative after analysis.</Text>
         <MetricGrid
           items={[
             ["Max Loss", formatMoney(calculations.maxLoss), tone],
@@ -937,6 +938,7 @@ function ReviewTradeStep({ draft, calculations, validation, missingData, onEditC
         </View>
       </Card>
       <Card style={styles.mathCard}>
+        <Text style={styles.helperText}>Local estimate for confirmation only. RiskWise backend will calculate the report values.</Text>
         <MetricGrid
           items={[
             ["Max Loss", formatMoney(calculations.maxLoss), tone],
@@ -1615,70 +1617,83 @@ function errorMessage(error) {
   return error.message || "Could not generate this check. Try again.";
 }
 
-function buildLocalResult(report, draft, selectedTicker, calculations) {
-  const rule = riskRulePercent(draft);
-  const liquidityKnown = Number(draft.openInterest || 0) > 0 || Number(draft.contractVolume || 0) > 0 || calculations.bidAskSpreadPercent !== null;
-  const riskTone = calculations.accountRiskPercent <= rule ? "good" : calculations.accountRiskPercent <= rule * 1.5 ? "warn" : "risk";
-  const score = Math.max(28, Math.min(92, Math.round(
-    (report?.setupScore || 62)
-    - (riskTone === "risk" ? 18 : riskTone === "warn" ? 8 : 0)
-    - (!liquidityKnown ? 10 : 0)
-    - (calculations.daysToExpiration < 7 ? 8 : 0)
-    - (calculations.requiredMovePercent > 8 ? 7 : 0)
-  )));
-  const weakest = !liquidityKnown ? "Liquidity Context" : riskTone !== "good" ? "Position Size" : calculations.requiredMovePercent > 8 ? "Signal Clarity" : "Volatility Context";
-  const title = `${draft.ticker || selectedTicker?.symbol || "Contract"} $${draft.strike || "?"} ${draft.optionSide === "put" ? "Put" : "Call"}`;
-  const subtitle = `${displayDate(parseDate(draft.expiration))} - ${draft.contracts || 1} Contract${Number(draft.contracts || 1) === 1 ? "" : "s"}`;
-  const issues = [
-    {
-      title: weakest,
-      score: weakest === "Liquidity Context" ? 48 : weakest === "Position Size" ? 52 : 61,
-      label: weakest === "Position Size" ? "Size Risk" : weakest === "Signal Clarity" ? "Needs Proof" : "Unknown",
-      tone: weakest === "Position Size" && riskTone === "risk" ? "risk" : "warn",
-      icon: weakest === "Position Size" ? "shield-outline" : weakest === "Signal Clarity" ? "analytics-outline" : "water-outline",
-      detail: weakest === "Liquidity Context" ? "Bid/ask, volume, open interest, or IV are missing." : weakest === "Position Size" ? "Risk is high relative to the account rule." : "The contract needs a clearer price thesis.",
-      evidence: weakest === "Liquidity Context"
-        ? ["Bid/ask spread is missing or unclear.", "Open interest and volume may be unknown.", "IV context is not confirmed."]
-        : [`Account risk is ${calculations.accountRiskPercent.toFixed(2)}%.`, `Your rule is ${rule}% max risk per trade.`, "Sizing should be decided before conviction."],
-      why: weakest === "Liquidity Context" ? "Options can look attractive but become hard to exit when liquidity is weak." : "A good thesis can still hurt the account if the premium risk is too large.",
-      whatHelps: weakest === "Liquidity Context" ? ["Add bid and ask", "Check open interest above 1,000", "Compare IV to normal levels"] : ["Reduce contracts", "Lower premium at risk", "Wait for a cheaper long option"],
-      nextQuestion: weakest === "Liquidity Context" ? "Is this contract liquid enough to enter and exit cleanly?" : "What position size keeps the trade survivable if it expires worthless?"
-    },
-    {
-      title: "Contract Structure",
-      score: report?.setupScore || 70,
-      label: calculations.maxLoss > 0 ? "Defined" : "Missing",
-      tone: calculations.maxLoss > 0 ? "good" : "risk",
-      icon: "document-text-outline",
-      detail: "Premium paid defines max loss for long options."
-    },
-    {
-      title: "Breakeven Hurdle",
-      score: calculations.requiredMovePercent > 8 ? 54 : 72,
-      label: calculations.requiredMovePercent > 8 ? "High Move" : "Manageable",
-      tone: calculations.requiredMovePercent > 8 ? "warn" : "good",
-      icon: "trending-up-outline",
-      detail: `Required move is about ${calculations.requiredMovePercent.toFixed(2)}% by expiration.`
-    }
-  ];
+function buildBackendResult(report, draft, selectedTicker) {
+  const riskMath = report?.riskMath || {};
+  const decision = report?.decisionSnapshot || {};
+  const label = report?.contractLabel || {};
+  const dataQuality = report?.dataQuality || {};
+  const maxLoss = numberOrZero(riskMath.max_loss ?? riskMath.capital_at_risk ?? label.max_loss ?? report?.amountAtRisk);
+  const breakeven = numberOrZero(riskMath.breakeven ?? riskMath.breakeven_price ?? label.breakeven);
+  const requiredMovePercent = numberOrZero(riskMath.required_move_to_breakeven_pct ?? label.required_move_pct);
+  const accountRiskPercent = numberOrZero(riskMath.risk_percent_of_account ?? label.account_risk_pct);
+  const score = numberOrZero(report?.setupScore ?? decision.setup_quality);
+  const riskPosture = String(report?.riskPosture || "").toLowerCase();
+  const tone = riskPosture === "elevated" || report?.badge === "High Risk"
+    ? "risk"
+    : riskPosture === "controlled" || report?.badge === "Constructive Setup"
+      ? "good"
+      : "warn";
+  const issues = buildBackendIssues(report, dataQuality, riskMath);
   return {
-    title,
-    subtitle,
-    score,
-    tone: riskTone,
-    verdict: score >= 75 ? "Clearer Setup" : score >= 55 ? "Mixed Conviction" : "Needs Review",
-    verdictSub: score >= 75 ? "Main risks are visible." : "Wait for the weak area to improve.",
-    maxLoss: calculations.maxLoss,
-    breakeven: calculations.breakeven,
-    requiredMovePercent: calculations.requiredMovePercent,
-    accountRiskPercent: calculations.accountRiskPercent,
+    title: report?.title || `${draft.ticker || selectedTicker?.symbol || "Contract"} backend review`,
+    subtitle: report?.subtitle || "Run the backend check to see authoritative risk math.",
+    score: score || 50,
+    tone,
+    verdict: report?.badge || "Backend Review",
+    verdictSub: report?.overallRead || "Backend math is the source of truth for this check.",
+    maxLoss,
+    breakeven,
+    requiredMovePercent,
+    accountRiskPercent,
     issues
   };
 }
 
+function buildBackendIssues(report, dataQuality, riskMath) {
+  const docket = Array.isArray(report?.agentDocket) ? report.agentDocket : [];
+  const docketIssues = docket.slice(0, 3).map((agent, index) => ({
+    title: agent.name || `Review Area ${index + 1}`,
+    score: numberOrZero(agent.score),
+    label: agent.read || "Review",
+    tone: numberOrZero(agent.score) < 60 ? "warn" : "good",
+    icon: index === 0 ? "analytics-outline" : index === 1 ? "document-text-outline" : "shield-outline",
+    detail: agent.evidence || agent.focus || "Backend review area.",
+    evidence: [agent.focus, agent.why_it_matters].filter(Boolean),
+    why: agent.why_it_matters || "",
+    whatHelps: [agent.next_question].filter(Boolean),
+    nextQuestion: agent.next_question || ""
+  }));
+  if (docketIssues.length) {
+    return docketIssues;
+  }
+  const missing = Array.isArray(dataQuality?.missing) ? dataQuality.missing : [];
+  return [
+    {
+      title: "Backend risk math",
+      score: 70,
+      label: "Authoritative",
+      tone: "good",
+      icon: "calculator-outline",
+      detail: `Max loss, breakeven, and required move came from backend risk_math. Basis: ${riskMath.required_move_basis || "backend"}.`
+    },
+    {
+      title: "Missing data",
+      score: missing.length ? 48 : 78,
+      label: missing.length ? "Incomplete" : "Covered",
+      tone: missing.length ? "warn" : "good",
+      icon: "alert-circle-outline",
+      detail: missing.length ? `Missing: ${missing.join(", ")}.` : "No backend missing-data flags were returned."
+    }
+  ];
+}
+
+function numberOrZero(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 0;
+}
+
 function buildStrategies(direction, riskTolerance, horizon) {
   const aggressive = riskTolerance === "aggressive";
-  const premiumBase = horizon === "short" ? 2.15 : horizon === "medium" ? 4.2 : 6.5;
   const choices = direction === "bearish" ? ["put"] : direction === "bullish" ? ["call"] : ["call", "put"];
   return choices.map((structure) => ({
     name: structure === "put" ? "Long Put" : "Long Call",
@@ -1690,8 +1705,7 @@ function buildStrategies(direction, riskTolerance, horizon) {
     maxProfit: structure === "put" ? "High until stock approaches zero" : "High / uncapped",
     maxLoss: "Premium paid",
     risk: aggressive ? "Aggressive" : "Single-leg v1",
-    tone: aggressive ? "warn" : "good",
-    premium: premiumBase
+    tone: aggressive ? "warn" : "good"
   }));
 }
 

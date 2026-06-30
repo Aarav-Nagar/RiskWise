@@ -27,7 +27,9 @@ export async function generateTradeCheck(draft, user) {
     amount_at_risk: Number(draft.amountAtRisk || 0),
     timeframe: draft.timeframe,
     account_size: Number(draft.accountSize || 0),
-    risk_budget_percent: riskBudgetPercent(draft)
+    risk_budget_percent: riskBudgetPercent(draft),
+    trade_thesis: buildTradeThesis(draft),
+    option_legs: buildOptionLegs(draft)
   }, user);
   return normalizeBackendReport(data, draft);
 }
@@ -312,6 +314,69 @@ function riskBudgetPercent(draft) {
     return Math.max(0.1, Math.min(25, Math.round((riskBudget / accountSize) * 1000) / 10));
   }
   return Number(draft?.riskBudgetPercent || 2) || 2;
+}
+
+function buildTradeThesis(draft) {
+  return compactObject({
+    direction: cleanText(draft?.direction),
+    target_price_low: nullableNumber(draft?.targetPriceLow),
+    target_price_high: nullableNumber(draft?.targetPriceHigh),
+    target_date: cleanText(draft?.targetDate),
+    catalyst: cleanText(draft?.catalyst),
+    invalidation: cleanText(draft?.invalidation),
+    confidence: nullableNumber(draft?.confidence),
+    maximum_loss: nullableNumber(draft?.amountAtRisk),
+    intended_hold_period: cleanText(draft?.timeframe || draft?.timeHorizon)
+  });
+}
+
+function buildOptionLegs(draft) {
+  const type = cleanText(draft?.optionSide || (String(draft?.tradeType || "").toLowerCase().includes("put") ? "put" : "call")).toLowerCase();
+  const strike = nullableNumber(draft?.strike);
+  const expiration = cleanText(draft?.expiration);
+  const quantity = nullableInteger(draft?.contracts);
+  if (!["call", "put"].includes(type) || !strike || !expiration || !quantity) {
+    return [];
+  }
+  return [
+    compactObject({
+      action: "buy",
+      type,
+      strike,
+      expiration,
+      quantity,
+      bid: nullableNumber(draft?.bid),
+      ask: nullableNumber(draft?.ask),
+      premium: nullableNumber(draft?.premium),
+      iv: nullableNumber(draft?.impliedVolatility),
+      greeks: compactObject({
+        delta: nullableSignedNumber(draft?.delta),
+        gamma: nullableSignedNumber(draft?.gamma),
+        theta: nullableSignedNumber(draft?.theta),
+        vega: nullableSignedNumber(draft?.vega),
+        rho: nullableSignedNumber(draft?.rho)
+      })
+    })
+  ];
+}
+
+function compactObject(value) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, item]) => {
+      if (item === null || item === undefined || item === "") return false;
+      if (typeof item === "object" && !Array.isArray(item) && Object.keys(item).length === 0) return false;
+      return true;
+    })
+  );
+}
+
+function cleanText(value) {
+  return String(value ?? "").trim();
+}
+
+function nullableSignedNumber(value) {
+  const number = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(number) ? number : null;
 }
 
 function formatApiError(data, response, fallback) {

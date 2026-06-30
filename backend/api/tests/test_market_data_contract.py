@@ -239,6 +239,86 @@ def test_trade_check_required_move_uses_underlying_to_breakeven() -> None:
     assert body["risk_math"]["required_move_basis"] == "underlying_to_breakeven"
 
 
+def test_trade_check_accepts_thesis_and_single_option_leg_model() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Call Option (Long)",
+            "option_side": "call",
+            "strike": 200,
+            "expiration": expiration,
+            "premium": 5,
+            "contracts": 1,
+            "amount_at_risk": 500,
+            "timeframe": "1-3 Months",
+            "account_size": 25000,
+            "risk_budget_percent": 2,
+            "trade_thesis": {
+                "direction": "bullish",
+                "target_price_low": 205,
+                "target_price_high": 215,
+                "target_date": expiration,
+                "catalyst": "Product event",
+                "invalidation": "Close below support",
+                "confidence": 62,
+                "maximum_loss": 500,
+                "intended_hold_period": "1-3 Months",
+            },
+            "option_legs": [
+                {
+                    "action": "buy",
+                    "type": "call",
+                    "strike": 200,
+                    "expiration": expiration,
+                    "quantity": 1,
+                    "bid": 4.9,
+                    "ask": 5.1,
+                    "premium": 5,
+                    "iv": 42,
+                    "greeks": {"delta": 0.48, "theta": -0.08},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["decision_snapshot"]["trade_thesis"]["direction"] == "bullish"
+    assert body["decision_snapshot"]["trade_thesis"]["maximum_loss"] == 500
+    assert body["contract_snapshot"]["option_legs"][0]["action"] == "buy"
+    assert body["contract_snapshot"]["option_legs"][0]["greeks"]["theta"] == -0.08
+
+
+def test_trade_check_rejects_multiple_option_legs_until_modeled() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Call Option (Long)",
+            "option_side": "call",
+            "strike": 200,
+            "expiration": expiration,
+            "premium": 5,
+            "contracts": 1,
+            "amount_at_risk": 500,
+            "timeframe": "1-3 Months",
+            "account_size": 25000,
+            "option_legs": [
+                {"action": "buy", "type": "call", "strike": 200, "expiration": expiration, "quantity": 1, "premium": 5},
+                {"action": "sell", "type": "call", "strike": 210, "expiration": expiration, "quantity": 1, "premium": 2},
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Multi-leg option checks are not enabled yet" in response.json()["detail"]
+
+
 def test_trade_check_returns_expiration_aware_agent_detail() -> None:
     expiration = (date.today() + timedelta(days=45)).isoformat()
     response = client.post(

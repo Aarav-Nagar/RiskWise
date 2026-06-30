@@ -22,6 +22,8 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
         raise ValueError("RiskWise currently supports only single-leg long calls and long puts. Spreads, covered calls, cash-secured puts, and short-option structures need a multi-leg model before scoring.")
     is_option = True
     option_side = normalize_option_side(request.option_side, request.trade_type)
+    option_legs = normalized_option_legs(request)
+    validate_option_legs_for_v1(option_legs, option_side)
     premium = float(request.premium or 0)
     contracts = int(request.contracts or 1)
     if is_option:
@@ -133,7 +135,7 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
             ["Trend Context", "good" if setup_score >= 65 else "warn"],
             ["Volatility Context", "good" if risk_score <= 6 else "warn"],
             ["Sizing Discipline", "good" if risk_percent <= 2 else "warn"],
-        ["Risk Review", "warn" if risk_percent > profile_limit else "good"],
+            ["Risk Review", "warn" if risk_percent > profile_limit else "good"],
         ],
         agents=[
             ["Rule Coverage", min(92, agent_agreement + 10), "good"],
@@ -164,6 +166,7 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
             "premium": premium or None,
             "contracts": contracts if is_option else None,
             "liquidity_risk": liquidity_risk,
+            "trade_thesis": request.trade_thesis.model_dump(exclude_none=True) if request.trade_thesis else {},
         },
         risk_math={
             "capital_at_risk": round(request.amount_at_risk, 2),
@@ -282,6 +285,7 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
             "open_interest": request.open_interest,
             "volume": request.contract_volume,
             "underlying_price": request.underlying_price,
+            "option_legs": option_legs,
         },
         data_quality={
             "has_underlying_quote": request.underlying_price is not None,
@@ -319,6 +323,41 @@ def is_supported_long_option(trade_type: str) -> bool:
     has_side = "call" in lower or "put" in lower
     has_long = "long" in lower or "(long)" in lower or "option" in lower
     return has_side and has_long
+
+
+def normalized_option_legs(request: TradeCheckRequest) -> list[dict[str, object]]:
+    if request.option_legs:
+        return [leg.model_dump(exclude_none=True) for leg in request.option_legs]
+    premium = float(request.premium or 0)
+    contracts = int(request.contracts or 1)
+    return [
+        {
+            "action": "buy",
+            "type": normalize_option_side(request.option_side, request.trade_type),
+            "strike": request.strike,
+            "expiration": request.expiration,
+            "quantity": contracts,
+            **({"bid": request.bid} if request.bid is not None else {}),
+            **({"ask": request.ask} if request.ask is not None else {}),
+            **({"premium": premium} if premium else {}),
+            **({"iv": request.implied_volatility} if request.implied_volatility is not None else {}),
+            "greeks": {},
+        }
+    ]
+
+
+def validate_option_legs_for_v1(option_legs: list[dict[str, object]], option_side: str) -> None:
+    if len(option_legs) > 1:
+        raise ValueError("Multi-leg option checks are not enabled yet. RiskWise stores leg-shaped data, but scoring currently supports one long call or one long put only.")
+    if not option_legs:
+        return
+    leg = option_legs[0]
+    if leg.get("action") != "buy":
+        raise ValueError("RiskWise v1 only scores long options. Sell legs require covered, collateral, assignment, and multi-leg risk modeling.")
+    if leg.get("type") not in {"call", "put"}:
+        raise ValueError("Option leg type must be call or put.")
+    if leg.get("type") != option_side:
+        raise ValueError("Option leg type must match the selected option side.")
 
 
 def planned_hold_days(timeframe: str) -> int:
