@@ -13,6 +13,8 @@
 - Added frontend trade-check payload builders for `trade_thesis` and `option_legs`, preserving user-confirmed fields and provider/manual Greeks without inventing missing values.
 - Removed invented strategy premiums and fake amount-at-risk defaults from stock-idea strategy cards; users now must confirm premium and sizing before analysis.
 - Changed the Check investigation result summary to project backend `riskMath`, `decisionSnapshot`, and `agentDocket` instead of recalculating report math on the frontend.
+- Enabled real two-leg vertical call/put spread checks with separate buy/sell legs, net debit/credit, spread width, max loss, max profit, breakeven, and leg bid/ask liquidity checks.
+- Restored Bull Call Spread and Bear Put Spread suggestions only after adding separate leg entry and backend spread scoring; covered calls and cash-secured puts remain disabled until stock/collateral modeling exists.
 
 ## 2026-06-29
 

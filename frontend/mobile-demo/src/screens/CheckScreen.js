@@ -72,7 +72,9 @@ const directions = [
 
 const optionStructures = [
   ["call", "Call", "Right to buy"],
-  ["put", "Put", "Right to sell"]
+  ["put", "Put", "Right to sell"],
+  ["call_spread", "Call Spread", "Two call legs"],
+  ["put_spread", "Put Spread", "Two put legs"]
 ];
 
 const horizons = [
@@ -234,7 +236,9 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
     updateDraft({
       structure,
       optionSide: structure.includes("put") ? "put" : "call",
-      tradeType: tradeTypeFromStructure(structure)
+      tradeType: tradeTypeFromStructure(structure),
+      premium: isSpreadStructure(structure) ? "" : draft.premium,
+      amountAtRisk: isSpreadStructure(structure) ? "" : draft.amountAtRisk
     });
   }
 
@@ -242,7 +246,14 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
     const nextExpiration = estimateExpirationFromHorizon(draft.timeHorizon || "medium");
     const price = Number(draft.underlyingPrice || market?.quote?.price || 100);
     const side = strategy.structure.includes("put") ? "put" : "call";
+    const spread = isSpreadStructure(strategy.structure);
     const strike = side === "put" ? Math.round(price * 0.97) : Math.round(price * 1.03);
+    const longStrike = spread
+      ? side === "put" ? Math.round(price * 0.99) : Math.round(price * 1.01)
+      : strike;
+    const shortStrike = spread
+      ? side === "put" ? Math.round(price * 0.93) : Math.round(price * 1.08)
+      : "";
     updateDraft({
       direction: strategy.direction,
       structure: strategy.structure,
@@ -250,7 +261,15 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
       tradeType: tradeTypeFromStructure(strategy.structure),
       expiration: nextExpiration,
       expirationSource: "strategy_estimate",
-      strike: String(strike),
+      strike: String(longStrike),
+      longStrike: spread ? String(longStrike) : "",
+      shortStrike: spread ? String(shortStrike) : "",
+      longPremium: "",
+      shortPremium: "",
+      longBid: "",
+      longAsk: "",
+      shortBid: "",
+      shortAsk: "",
       premium: "",
       bid: "",
       ask: "",
@@ -268,10 +287,10 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
   function setNumericField(field, value) {
     const clean = String(value || "").replace(/[^0-9.]/g, "");
     const updates = { [field]: clean };
-    const premium = Number(field === "premium" ? clean : draft.premium || 0);
-    const contracts = Number(field === "contracts" ? clean : draft.contracts || 0);
-    if (premium > 0 && contracts > 0) {
-      updates.amountAtRisk = String(Math.round(premium * contracts * 100));
+    const nextDraft = { ...draft, [field]: clean };
+    const nextMath = buildRiskMath(nextDraft);
+    if (nextMath.maxLoss > 0) {
+      updates.amountAtRisk = String(Math.round(nextMath.maxLoss * 100) / 100);
     }
     updateDraft(updates);
   }
@@ -805,7 +824,8 @@ function MiniCalendar({ visibleMonth, selected, setVisibleMonth, onSelect }) {
 }
 
 function ContractDetailsStep({ draft, setNumericField, validation, contractReferences = [], providerMessage = "", onSelectContract, onContinue }) {
-  const requiredReady = !validation.strike && !validation.premium && !validation.bidAsk && !validation.impliedVolatility && !validation.openInterest && !validation.contractVolume;
+  const spread = isSpreadStructure(draft.structure || draft.tradeType);
+  const requiredReady = !validation.strike && !validation.premium && !validation.spread && !validation.bidAsk && !validation.impliedVolatility && !validation.openInterest && !validation.contractVolume;
   const side = draft.optionSide || (draft.structure?.includes("put") ? "put" : "call");
   const referenceRows = contractReferences
     .filter((contract) => !side || contract.contract_type === side)
@@ -846,10 +866,27 @@ function ContractDetailsStep({ draft, setNumericField, validation, contractRefer
           <Text style={styles.referenceSub}>{providerMessage}</Text>
         </Card>
       ) : null}
-      <FieldRow label="Strike Price" value={draft.strike} onChangeText={(value) => setNumericField("strike", value)} prefix="$" error={validation.strike} />
-      <FieldRow label="Premium (Mid)" value={draft.premium} onChangeText={(value) => setNumericField("premium", value)} prefix="$" error={validation.premium} />
-      <FieldRow label="Bid" value={draft.bid} onChangeText={(value) => setNumericField("bid", value)} prefix="$" />
-      <FieldRow label="Ask" value={draft.ask} onChangeText={(value) => setNumericField("ask", value)} prefix="$" error={validation.bidAsk} />
+      {spread ? (
+        <Card style={styles.referenceCard}>
+          <Text style={styles.referenceTitle}>Two-leg vertical spread</Text>
+          <Text style={styles.referenceSub}>Enter the buy leg and sell leg separately. RiskWise will calculate net debit/credit, width, max loss, max profit, and breakeven on the backend.</Text>
+          <FieldRow label="Buy Leg Strike" value={draft.longStrike} onChangeText={(value) => setNumericField("longStrike", value)} prefix="$" error={validation.spread} />
+          <FieldRow label="Buy Leg Premium" value={draft.longPremium} onChangeText={(value) => setNumericField("longPremium", value)} prefix="$" error={validation.premium} />
+          <FieldRow label="Buy Leg Bid" value={draft.longBid} onChangeText={(value) => setNumericField("longBid", value)} prefix="$" />
+          <FieldRow label="Buy Leg Ask" value={draft.longAsk} onChangeText={(value) => setNumericField("longAsk", value)} prefix="$" />
+          <FieldRow label="Sell Leg Strike" value={draft.shortStrike} onChangeText={(value) => setNumericField("shortStrike", value)} prefix="$" />
+          <FieldRow label="Sell Leg Premium" value={draft.shortPremium} onChangeText={(value) => setNumericField("shortPremium", value)} prefix="$" />
+          <FieldRow label="Sell Leg Bid" value={draft.shortBid} onChangeText={(value) => setNumericField("shortBid", value)} prefix="$" />
+          <FieldRow label="Sell Leg Ask" value={draft.shortAsk} onChangeText={(value) => setNumericField("shortAsk", value)} prefix="$" error={validation.bidAsk} />
+        </Card>
+      ) : (
+        <>
+          <FieldRow label="Strike Price" value={draft.strike} onChangeText={(value) => setNumericField("strike", value)} prefix="$" error={validation.strike} />
+          <FieldRow label="Premium (Mid)" value={draft.premium} onChangeText={(value) => setNumericField("premium", value)} prefix="$" error={validation.premium} />
+          <FieldRow label="Bid" value={draft.bid} onChangeText={(value) => setNumericField("bid", value)} prefix="$" />
+          <FieldRow label="Ask" value={draft.ask} onChangeText={(value) => setNumericField("ask", value)} prefix="$" error={validation.bidAsk} />
+        </>
+      )}
       <FieldRow label="IV (Implied Volatility)" value={draft.impliedVolatility} onChangeText={(value) => setNumericField("impliedVolatility", value)} suffix="%" error={validation.impliedVolatility} />
       <FieldRow label="Open Interest" value={draft.openInterest} onChangeText={(value) => setNumericField("openInterest", value)} error={validation.openInterest} />
       <FieldRow label="Volume" value={draft.contractVolume} onChangeText={(value) => setNumericField("contractVolume", value)} error={validation.contractVolume} />
@@ -1466,6 +1503,9 @@ function MissingDataCard({ items = [] }) {
 }
 
 function buildRiskMath(draft) {
+  if (isSpreadStructure(draft.structure || draft.tradeType)) {
+    return buildSpreadRiskMath(draft);
+  }
   const premium = Number(draft.premium || 0);
   const contracts = Math.max(0, Number(draft.contracts || 0));
   const strike = Number(draft.strike || 0);
@@ -1488,12 +1528,77 @@ function buildRiskMath(draft) {
   return { premium, contracts, strike, maxLoss, accountRiskPercent, breakeven, requiredMovePercent, bidAskSpreadPercent, daysToExpiration };
 }
 
+function buildSpreadRiskMath(draft) {
+  const contracts = Math.max(0, Number(draft.contracts || 0));
+  const accountSize = Math.max(1, Number(draft.accountSize || 1));
+  const side = draft.optionSide || (String(draft.tradeType || "").toLowerCase().includes("put") ? "put" : "call");
+  const longStrike = Number(draft.longStrike || draft.strike || 0);
+  const shortStrike = Number(draft.shortStrike || 0);
+  const longPremium = Number(draft.longPremium || 0);
+  const shortPremium = Number(draft.shortPremium || 0);
+  const width = Math.abs(shortStrike - longStrike);
+  const netDebit = longPremium - shortPremium;
+  const netCredit = shortPremium - longPremium;
+  const debitOrientation = side === "call" ? longStrike < shortStrike : longStrike > shortStrike;
+  const maxLoss = debitOrientation
+    ? Math.max(0, netDebit * contracts * 100)
+    : Math.max(0, (width - netCredit) * contracts * 100);
+  const maxProfit = debitOrientation
+    ? Math.max(0, (width - netDebit) * contracts * 100)
+    : Math.max(0, netCredit * contracts * 100);
+  const breakeven = debitOrientation
+    ? side === "call" ? longStrike + netDebit : longStrike - netDebit
+    : side === "call" ? shortStrike + netCredit : shortStrike - netCredit;
+  const underlying = Number(draft.underlyingPrice || 0) || longStrike;
+  const requiredMovePercent = underlying > 0
+    ? side === "put"
+      ? Math.max(0, (underlying - breakeven) / underlying * 100)
+      : Math.max(0, (breakeven - underlying) / underlying * 100)
+    : 0;
+  const longBid = Number(draft.longBid || 0);
+  const longAsk = Number(draft.longAsk || 0);
+  const shortBid = Number(draft.shortBid || 0);
+  const shortAsk = Number(draft.shortAsk || 0);
+  const bidAskSpreadPercent = Math.max(
+    legSpreadPercent(longBid, longAsk),
+    legSpreadPercent(shortBid, shortAsk)
+  );
+  const expiration = parseDate(draft.expiration);
+  const daysToExpiration = expiration ? dayDiff(new Date(), expiration) : 0;
+  return {
+    premium: Math.max(0, debitOrientation ? netDebit : netCredit),
+    contracts,
+    strike: longStrike,
+    longStrike,
+    shortStrike,
+    width,
+    netDebit,
+    netCredit,
+    maxLoss,
+    maxProfit,
+    accountRiskPercent: maxLoss / accountSize * 100,
+    breakeven,
+    requiredMovePercent,
+    bidAskSpreadPercent: Number.isFinite(bidAskSpreadPercent) ? bidAskSpreadPercent : null,
+    daysToExpiration
+  };
+}
+
 function validateOptionContract(draft, selectedTicker, calculations) {
   const messages = [];
+  const spread = isSpreadStructure(draft.structure || draft.tradeType);
   const bidProvided = hasText(draft.bid);
   const askProvided = hasText(draft.ask);
+  const longBidProvided = hasText(draft.longBid);
+  const longAskProvided = hasText(draft.longAsk);
+  const shortBidProvided = hasText(draft.shortBid);
+  const shortAskProvided = hasText(draft.shortAsk);
   const bid = Number(draft.bid || 0);
   const ask = Number(draft.ask || 0);
+  const longBid = Number(draft.longBid || 0);
+  const longAsk = Number(draft.longAsk || 0);
+  const shortBid = Number(draft.shortBid || 0);
+  const shortAsk = Number(draft.shortAsk || 0);
   const ivProvided = hasText(draft.impliedVolatility);
   const iv = Number(draft.impliedVolatility || 0);
   const accountSize = Number(draft.accountSize || 0);
@@ -1504,23 +1609,49 @@ function validateOptionContract(draft, selectedTicker, calculations) {
     premium: calculations.premium > 0 ? "" : "Premium is required.",
     contracts: calculations.contracts > 0 ? "" : "At least one contract is required.",
     expiration: parseDate(draft.expiration) && calculations.daysToExpiration >= 0 ? "" : "Choose a future expiration.",
-    bidAsk: bidAskValidationMessage(bidProvided, askProvided, bid, ask),
     impliedVolatility: ivProvided && (iv <= 0 || iv > 500) ? "IV must be between 0 and 500%, or left blank if unknown." : "",
     openInterest: hasText(draft.openInterest) && Number(draft.openInterest) < 0 ? "Open interest cannot be negative." : "",
     contractVolume: hasText(draft.contractVolume) && Number(draft.contractVolume) < 0 ? "Volume cannot be negative." : "",
     accountSize: accountSize > 0 ? "" : "Account size must be greater than zero.",
     riskRule: rawRiskRule > 0 && rawRiskRule <= 25 ? "" : "Risk rule must be above 0% and no more than 25%.",
-    structure: isSupportedLongStructure(draft.structure || draft.optionSide || draft.tradeType) ? "" : "RiskWise v1 only supports single-leg long calls and long puts."
+    structure: isSupportedOptionStructure(draft.structure || draft.optionSide || draft.tradeType) ? "" : "RiskWise supports long calls, long puts, and two-leg vertical call/put spreads.",
+    spread: spreadValidationMessage(draft, calculations),
+    bidAsk: spread
+      ? spreadBidAskValidationMessage(longBidProvided, longAskProvided, longBid, longAsk, shortBidProvided, shortAskProvided, shortBid, shortAsk)
+      : bidAskValidationMessage(bidProvided, askProvided, bid, ask)
   };
   Object.values(validation).forEach((message) => message && messages.push(message));
   return { ...validation, messages, ready: messages.length === 0 };
 }
 
-function isSupportedLongStructure(value) {
+function isSupportedOptionStructure(value) {
   const lower = String(value || "").toLowerCase();
-  if (["call", "put"].includes(lower)) return true;
-  if (["call option (long)", "put option (long)", "long call", "long put"].includes(lower)) return true;
+  if (["call", "put", "call_spread", "put_spread"].includes(lower)) return true;
+  if (["call option (long)", "put option (long)", "long call", "long put", "call option spread", "put option spread"].includes(lower)) return true;
   return false;
+}
+
+function isSpreadStructure(value) {
+  const lower = String(value || "").toLowerCase();
+  return lower.includes("spread") || lower === "call_spread" || lower === "put_spread";
+}
+
+function legSpreadPercent(bid, ask) {
+  if (!(bid > 0 && ask > bid)) return Number.NaN;
+  const mid = (bid + ask) / 2;
+  return mid > 0 ? (ask - bid) / mid * 100 : Number.NaN;
+}
+
+function spreadValidationMessage(draft, calculations) {
+  if (!isSpreadStructure(draft.structure || draft.tradeType)) return "";
+  const longStrike = Number(draft.longStrike || draft.strike || 0);
+  const shortStrike = Number(draft.shortStrike || 0);
+  const longPremium = Number(draft.longPremium || 0);
+  const shortPremium = Number(draft.shortPremium || 0);
+  if (longStrike <= 0 || shortStrike <= 0 || longStrike === shortStrike) return "Spread needs two different positive strikes.";
+  if (longPremium <= 0 || shortPremium <= 0) return "Both spread legs need confirmed premiums.";
+  if (calculations.width <= 0 || calculations.maxLoss <= 0 || calculations.maxProfit <= 0) return "Spread net premium must be positive and less than the strike width.";
+  return "";
 }
 
 function bidAskValidationMessage(bidProvided, askProvided, bid, ask) {
@@ -1530,9 +1661,21 @@ function bidAskValidationMessage(bidProvided, askProvided, bid, ask) {
   return "";
 }
 
+function spreadBidAskValidationMessage(longBidProvided, longAskProvided, longBid, longAsk, shortBidProvided, shortAskProvided, shortBid, shortAsk) {
+  const longMessage = bidAskValidationMessage(longBidProvided, longAskProvided, longBid, longAsk);
+  if (longMessage) return `Buy leg: ${longMessage}`;
+  const shortMessage = bidAskValidationMessage(shortBidProvided, shortAskProvided, shortBid, shortAsk);
+  if (shortMessage) return `Sell leg: ${shortMessage}`;
+  return "";
+}
+
 function buildMissingDataWarnings(draft, market) {
   const warnings = [];
-  if (!hasText(draft.bid) || !hasText(draft.ask)) {
+  const spread = isSpreadStructure(draft.structure || draft.tradeType);
+  const missingBidAsk = spread
+    ? !hasText(draft.longBid) || !hasText(draft.longAsk) || !hasText(draft.shortBid) || !hasText(draft.shortAsk)
+    : !hasText(draft.bid) || !hasText(draft.ask);
+  if (missingBidAsk) {
     warnings.push({ label: "Bid/ask spread", detail: "Liquidity and realistic fill quality are unknown without both bid and ask." });
   }
   if (!hasText(draft.impliedVolatility)) {
@@ -1551,7 +1694,7 @@ function buildMissingDataWarnings(draft, market) {
   if (!market?.earnings?.date) {
     warnings.push({ label: "Earnings date", detail: "RiskWise will not assume an earnings date when the provider does not attach one." });
   }
-  if (!hasText(draft.bid) && !hasText(draft.ask)) {
+  if (missingBidAsk) {
     warnings.push({ label: "Current option price", detail: "The premium is user-entered or extracted; it is not a live option-chain price." });
   }
   return warnings;
@@ -1694,19 +1837,31 @@ function numberOrZero(value) {
 
 function buildStrategies(direction, riskTolerance, horizon) {
   const aggressive = riskTolerance === "aggressive";
-  const choices = direction === "bearish" ? ["put"] : direction === "bullish" ? ["call"] : ["call", "put"];
+  const choices = direction === "bearish" ? ["put", "put_spread"] : direction === "bullish" ? ["call", "call_spread"] : ["call", "put"];
   return choices.map((structure) => ({
-    name: structure === "put" ? "Long Put" : "Long Call",
+    name: strategyName(structure),
     structure,
-    direction: structure === "put" ? "bearish" : "bullish",
-    why: structure === "put"
-      ? "Supported v1 structure for a directional downside thesis. Max loss is the premium paid."
-      : "Supported v1 structure for a directional upside thesis. Max loss is the premium paid.",
-    maxProfit: structure === "put" ? "High until stock approaches zero" : "High / uncapped",
-    maxLoss: "Premium paid",
-    risk: aggressive ? "Aggressive" : "Single-leg v1",
+    direction: structure.includes("put") ? "bearish" : "bullish",
+    why: strategyWhy(structure),
+    maxProfit: isSpreadStructure(structure) ? "Capped at width minus net debit" : structure === "put" ? "High until stock approaches zero" : "High / uncapped",
+    maxLoss: isSpreadStructure(structure) ? "Net debit or spread width minus credit" : "Premium paid",
+    risk: aggressive ? "Aggressive" : isSpreadStructure(structure) ? "Two-leg spread" : "Single-leg v1",
     tone: aggressive ? "warn" : "good"
   }));
+}
+
+function strategyName(structure) {
+  if (structure === "put") return "Long Put";
+  if (structure === "call_spread") return "Bull Call Spread";
+  if (structure === "put_spread") return "Bear Put Spread";
+  return "Long Call";
+}
+
+function strategyWhy(structure) {
+  if (structure === "put") return "Supported v1 structure for a directional downside thesis. Max loss is the premium paid.";
+  if (structure === "call_spread") return "Two call legs for an upside thesis with capped profit and defined max loss. Requires buy-leg and sell-leg premiums.";
+  if (structure === "put_spread") return "Two put legs for a downside thesis with capped profit and defined max loss. Requires buy-leg and sell-leg premiums.";
+  return "Supported v1 structure for a directional upside thesis. Max loss is the premium paid.";
 }
 
 function buildSearchResults(query, remoteRows = []) {
@@ -1740,6 +1895,8 @@ function symbolToItem(symbol, name, exchange) {
 }
 
 function tradeTypeFromStructure(structure) {
+  if (structure === "call_spread") return "Call Option Spread";
+  if (structure === "put_spread") return "Put Option Spread";
   if (structure === "put") return "Put Option (Long)";
   return "Call Option (Long)";
 }

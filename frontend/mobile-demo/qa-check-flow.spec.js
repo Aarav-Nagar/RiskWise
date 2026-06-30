@@ -84,7 +84,7 @@ test("completed check becomes selected Coach context", async ({ page }) => {
   await expect(page.getByText(/ACHR/i).first()).toBeVisible();
   await page.getByPlaceholder("Ask RiskWiseAI").fill("What trade did I do?");
   await page.getByLabel("Send message").click();
-  await expect(page.getByText(/ACHR Call Option/i)).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText(/ACHR.*Call Option/i)).toBeVisible({ timeout: 10000 });
 
   expect(filteredErrors(errors)).toBe("");
 });
@@ -102,7 +102,7 @@ test("stock idea flow suggests strategies before contract details", async ({ pag
   await page.getByText("Continue").click();
   await expect(page.getByText("Suggested Strategies")).toBeVisible();
   await expect(page.getByText("Long Call")).toBeVisible();
-  await expect(page.getByText("Bull Call Spread")).toHaveCount(0);
+  await expect(page.getByText("Bull Call Spread")).toBeVisible();
   await expect(page.getByText("Cash Secured Put")).toHaveCount(0);
   await expect(page.getByText("Covered Call")).toHaveCount(0);
   await expect(page.getByText("Explore Strategy").first()).toBeVisible();

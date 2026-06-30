@@ -161,9 +161,9 @@ def test_trade_check_rejects_impossible_bid_ask() -> None:
     assert "ask" in response.json()["detail"].lower()
 
 
-def test_trade_check_rejects_unsupported_spreads_and_income_structures() -> None:
+def test_trade_check_rejects_spreads_without_legs_and_income_structures() -> None:
     expiration = (date.today() + timedelta(days=45)).isoformat()
-    for trade_type in ["Call Option Spread", "Put Option Spread", "Cash Secured Put", "Covered Call"]:
+    for trade_type in ["Call Option Spread", "Put Option Spread"]:
         response = client.post(
             "/trade-check",
             json={
@@ -181,7 +181,27 @@ def test_trade_check_rejects_unsupported_spreads_and_income_structures() -> None
         )
 
         assert response.status_code == 400
-        assert "single-leg long calls and long puts" in response.json()["detail"]
+        assert "Spread checks require exactly two option legs" in response.json()["detail"]
+
+    for trade_type in ["Cash Secured Put", "Covered Call"]:
+        response = client.post(
+            "/trade-check",
+            json={
+                "user_id": "test_user",
+                "ticker": "AAPL",
+                "trade_type": trade_type,
+                "strike": 190,
+                "expiration": expiration,
+                "premium": 2.15,
+                "contracts": 1,
+                "amount_at_risk": 215,
+                "timeframe": "1-2 Weeks",
+                "account_size": 25000,
+            },
+        )
+
+        assert response.status_code == 400
+        assert "Covered calls and cash-secured puts" in response.json()["detail"]
 
 
 def test_trade_check_uses_profile_risk_budget_and_medium_horizon() -> None:
@@ -292,20 +312,20 @@ def test_trade_check_accepts_thesis_and_single_option_leg_model() -> None:
     assert body["contract_snapshot"]["option_legs"][0]["greeks"]["theta"] == -0.08
 
 
-def test_trade_check_rejects_multiple_option_legs_until_modeled() -> None:
+def test_trade_check_scores_call_debit_spread_with_two_legs() -> None:
     expiration = (date.today() + timedelta(days=45)).isoformat()
     response = client.post(
         "/trade-check",
         json={
             "user_id": "test_user",
             "ticker": "AAPL",
-            "trade_type": "Call Option (Long)",
+            "trade_type": "Call Option Spread",
             "option_side": "call",
             "strike": 200,
             "expiration": expiration,
             "premium": 5,
             "contracts": 1,
-            "amount_at_risk": 500,
+            "amount_at_risk": 300,
             "timeframe": "1-3 Months",
             "account_size": 25000,
             "option_legs": [
@@ -315,8 +335,14 @@ def test_trade_check_rejects_multiple_option_legs_until_modeled() -> None:
         },
     )
 
-    assert response.status_code == 400
-    assert "Multi-leg option checks are not enabled yet" in response.json()["detail"]
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk_math"]["strategy_kind"] == "vertical_spread"
+    assert body["risk_math"]["spread_width"] == 10
+    assert body["risk_math"]["net_debit"] == 3
+    assert body["risk_math"]["max_loss"] == 300
+    assert body["risk_math"]["max_profit"] == 700
+    assert body["risk_math"]["breakeven"] == 203
 
 
 def test_trade_check_returns_expiration_aware_agent_detail() -> None:

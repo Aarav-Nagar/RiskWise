@@ -332,6 +332,9 @@ function buildTradeThesis(draft) {
 
 function buildOptionLegs(draft) {
   const type = cleanText(draft?.optionSide || (String(draft?.tradeType || "").toLowerCase().includes("put") ? "put" : "call")).toLowerCase();
+  if (isSpreadStructure(draft?.structure || draft?.tradeType)) {
+    return buildSpreadLegs(draft, type);
+  }
   const strike = nullableNumber(draft?.strike);
   const expiration = cleanText(draft?.expiration);
   const quantity = nullableInteger(draft?.contracts);
@@ -358,6 +361,59 @@ function buildOptionLegs(draft) {
       })
     })
   ];
+}
+
+function buildSpreadLegs(draft, type) {
+  const expiration = cleanText(draft?.expiration);
+  const quantity = nullableInteger(draft?.contracts);
+  const longStrike = nullableNumber(draft?.longStrike || draft?.strike);
+  const shortStrike = nullableNumber(draft?.shortStrike);
+  if (!["call", "put"].includes(type) || !expiration || !quantity || !longStrike || !shortStrike) {
+    return [];
+  }
+  return [
+    compactObject({
+      action: "buy",
+      type,
+      strike: longStrike,
+      expiration,
+      quantity,
+      bid: nullableNumber(draft?.longBid),
+      ask: nullableNumber(draft?.longAsk),
+      premium: nullableNumber(draft?.longPremium),
+      iv: nullableNumber(draft?.impliedVolatility),
+      greeks: compactObject({
+        delta: nullableSignedNumber(draft?.longDelta || draft?.delta),
+        gamma: nullableSignedNumber(draft?.longGamma || draft?.gamma),
+        theta: nullableSignedNumber(draft?.longTheta || draft?.theta),
+        vega: nullableSignedNumber(draft?.longVega || draft?.vega),
+        rho: nullableSignedNumber(draft?.longRho || draft?.rho)
+      })
+    }),
+    compactObject({
+      action: "sell",
+      type,
+      strike: shortStrike,
+      expiration,
+      quantity,
+      bid: nullableNumber(draft?.shortBid),
+      ask: nullableNumber(draft?.shortAsk),
+      premium: nullableNumber(draft?.shortPremium),
+      iv: nullableNumber(draft?.impliedVolatility),
+      greeks: compactObject({
+        delta: nullableSignedNumber(draft?.shortDelta),
+        gamma: nullableSignedNumber(draft?.shortGamma),
+        theta: nullableSignedNumber(draft?.shortTheta),
+        vega: nullableSignedNumber(draft?.shortVega),
+        rho: nullableSignedNumber(draft?.shortRho)
+      })
+    })
+  ];
+}
+
+function isSpreadStructure(value) {
+  const lower = String(value || "").toLowerCase();
+  return lower.includes("spread") || lower === "call_spread" || lower === "put_spread";
 }
 
 function compactObject(value) {
