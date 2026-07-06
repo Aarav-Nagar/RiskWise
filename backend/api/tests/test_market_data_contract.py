@@ -345,6 +345,42 @@ def test_trade_check_scores_call_debit_spread_with_two_legs() -> None:
     assert body["risk_math"]["breakeven"] == 203
 
 
+def test_trade_check_scores_put_debit_spread_with_downside_breakeven() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Put Option Spread",
+            "option_side": "put",
+            "strike": 210,
+            "expiration": expiration,
+            "premium": 5,
+            "contracts": 1,
+            "amount_at_risk": 300,
+            "timeframe": "1-3 Months",
+            "account_size": 25000,
+            "underlying_price": 215,
+            "option_legs": [
+                {"action": "buy", "type": "put", "strike": 210, "expiration": expiration, "quantity": 1, "premium": 5},
+                {"action": "sell", "type": "put", "strike": 200, "expiration": expiration, "quantity": 1, "premium": 2},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk_math"]["strategy_kind"] == "vertical_spread"
+    assert body["risk_math"]["spread_width"] == 10
+    assert body["risk_math"]["net_debit"] == 3
+    assert body["risk_math"]["max_loss"] == 300
+    assert body["risk_math"]["max_profit"] == 700
+    assert body["risk_math"]["breakeven"] == 207
+    assert body["risk_math"]["required_move_to_breakeven_pct"] == 3.72
+    assert body["contract_snapshot"]["structure"]["spread_orientation"] == "put_debit"
+
+
 def test_trade_check_returns_expiration_aware_agent_detail() -> None:
     expiration = (date.today() + timedelta(days=45)).isoformat()
     response = client.post(
