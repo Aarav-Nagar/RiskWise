@@ -381,6 +381,78 @@ def test_trade_check_scores_put_debit_spread_with_downside_breakeven() -> None:
     assert body["contract_snapshot"]["structure"]["spread_orientation"] == "put_debit"
 
 
+def test_trade_check_scores_call_credit_spread_with_bearish_breakeven() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Call Option Spread",
+            "option_side": "call",
+            "strike": 210,
+            "expiration": expiration,
+            "premium": 2,
+            "contracts": 1,
+            "amount_at_risk": 700,
+            "timeframe": "1-3 Months",
+            "account_size": 25000,
+            "underlying_price": 216,
+            "option_legs": [
+                {"action": "buy", "type": "call", "strike": 220, "expiration": expiration, "quantity": 1, "premium": 2},
+                {"action": "sell", "type": "call", "strike": 210, "expiration": expiration, "quantity": 1, "premium": 5},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk_math"]["strategy_kind"] == "vertical_spread"
+    assert body["risk_math"]["spread_width"] == 10
+    assert body["risk_math"]["net_credit"] == 3
+    assert body["risk_math"]["max_loss"] == 700
+    assert body["risk_math"]["max_profit"] == 300
+    assert body["risk_math"]["breakeven"] == 213
+    assert body["risk_math"]["required_move_to_breakeven_pct"] == 1.39
+    assert body["contract_snapshot"]["structure"]["spread_orientation"] == "call_credit"
+
+
+def test_trade_check_scores_put_credit_spread_with_bullish_breakeven() -> None:
+    expiration = (date.today() + timedelta(days=45)).isoformat()
+    response = client.post(
+        "/trade-check",
+        json={
+            "user_id": "test_user",
+            "ticker": "AAPL",
+            "trade_type": "Put Option Spread",
+            "option_side": "put",
+            "strike": 200,
+            "expiration": expiration,
+            "premium": 2,
+            "contracts": 1,
+            "amount_at_risk": 700,
+            "timeframe": "1-3 Months",
+            "account_size": 25000,
+            "underlying_price": 194,
+            "option_legs": [
+                {"action": "buy", "type": "put", "strike": 190, "expiration": expiration, "quantity": 1, "premium": 2},
+                {"action": "sell", "type": "put", "strike": 200, "expiration": expiration, "quantity": 1, "premium": 5},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["risk_math"]["strategy_kind"] == "vertical_spread"
+    assert body["risk_math"]["spread_width"] == 10
+    assert body["risk_math"]["net_credit"] == 3
+    assert body["risk_math"]["max_loss"] == 700
+    assert body["risk_math"]["max_profit"] == 300
+    assert body["risk_math"]["breakeven"] == 197
+    assert body["risk_math"]["required_move_to_breakeven_pct"] == 1.55
+    assert body["contract_snapshot"]["structure"]["spread_orientation"] == "put_credit"
+
+
 def test_trade_check_returns_expiration_aware_agent_detail() -> None:
     expiration = (date.today() + timedelta(days=45)).isoformat()
     response = client.post(

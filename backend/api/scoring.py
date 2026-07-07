@@ -54,7 +54,12 @@ def score_trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
     hold_vs_expiration = "Too tight" if selected_hold_days >= trading_days else "Room available" if trading_days - selected_hold_days >= 5 else "Tight"
     breakeven = float(structure["breakeven"])
     breakeven_basis = str(structure["breakeven_basis"])
-    required_move, required_move_basis = required_move_to_breakeven(request.underlying_price, breakeven, option_side)
+    required_move, required_move_basis = required_move_to_breakeven(
+        request.underlying_price,
+        breakeven,
+        option_side,
+        str(structure.get("spread_orientation") or ""),
+    )
     if required_move is None:
         required_move = heuristic_required_move
         required_move_basis = "riskwise_heuristic_missing_underlying"
@@ -516,13 +521,21 @@ def timeframe_risk_adjustment(timeframe: str) -> float:
     }.get(str(timeframe or "").strip(), 0.55)
 
 
-def required_move_to_breakeven(underlying_price: float | None, breakeven: float, option_side: str) -> tuple[float | None, str]:
+def required_move_to_breakeven(
+    underlying_price: float | None,
+    breakeven: float,
+    option_side: str,
+    spread_orientation: str = "",
+) -> tuple[float | None, str]:
     if not underlying_price or underlying_price <= 0 or breakeven <= 0:
         return None, "missing_underlying"
-    if option_side == "put":
-        move = max(0.0, (underlying_price - breakeven) / underlying_price * 100)
-    else:
+    bullish_breakeven = option_side == "call"
+    if spread_orientation:
+        bullish_breakeven = spread_orientation in {"call_debit", "put_credit"}
+    if bullish_breakeven:
         move = max(0.0, (breakeven - underlying_price) / underlying_price * 100)
+    else:
+        move = max(0.0, (underlying_price - breakeven) / underlying_price * 100)
     return round(move, 2), "underlying_to_breakeven"
 
 
