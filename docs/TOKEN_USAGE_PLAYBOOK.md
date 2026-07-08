@@ -65,7 +65,11 @@ dumping full test logs into chat
 
 - `frontend/mobile-demo/node_modules`
 - `frontend/mobile-demo/dist`
+- `frontend/mobile-demo/dist-web`
 - `frontend/mobile-demo/.expo`
+- `frontend/mobile-demo/playwright-report`
+- `frontend/mobile-demo/test-results`
+- `frontend/mobile-demo/screenshots`
 - `backend/api/evals/results`
 - `trading-research/arena/figures`
 - root smoke screenshots named `riskwise-*.png`
@@ -92,9 +96,18 @@ Do not delete without explicit approval:
 - `node_modules`
 - `.expo`
 - `dist`
+- untracked source files
+- newly created docs
 - benchmark folders
 - screenshots that may be used in docs
 - historical research outputs
+
+Before any cleanup:
+
+1. Run `git status --short`.
+2. List exact cleanup targets.
+3. Remove only generated folders already ignored by `.gitignore`.
+4. Never use broad recursive deletion patterns such as `Get-ChildItem -Recurse -Include`.
 
 ## Cached Tokens
 

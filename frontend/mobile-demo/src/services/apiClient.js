@@ -126,20 +126,22 @@ export async function searchMarketSymbols(query) {
 
 export async function getMarketBundle(ticker) {
   if (!ticker) {
-    return { quote: null, profile: null, news: null, earnings: null };
+    return { quote: null, profile: null, news: null, earnings: null, optionsContext: null };
   }
   const symbol = encodeURIComponent(ticker.toUpperCase());
-  const [quote, profile, news, earnings] = await Promise.allSettled([
+  const [quote, profile, news, earnings, optionsContext] = await Promise.allSettled([
     getJson(`/market/quote/${symbol}`),
     getJson(`/market/profile/${symbol}`),
     getJson(`/market/news/${symbol}`),
-    getJson(`/market/earnings/${symbol}`)
+    getJson(`/market/earnings/${symbol}`),
+    getJson(`/market/options-context/${symbol}`)
   ]);
   return {
     quote: quote.status === "fulfilled" ? quote.value : null,
     profile: profile.status === "fulfilled" ? profile.value : null,
     news: news.status === "fulfilled" ? news.value : null,
-    earnings: earnings.status === "fulfilled" ? earnings.value : null
+    earnings: earnings.status === "fulfilled" ? earnings.value : null,
+    optionsContext: optionsContext.status === "fulfilled" ? optionsContext.value : null
   };
 }
 

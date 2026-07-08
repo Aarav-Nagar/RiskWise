@@ -14,12 +14,16 @@ backend/api/evals/results/
 docs/qa_runs/
 frontend/mobile-demo/playwright-report/
 frontend/mobile-demo/test-results/
+frontend/mobile-demo/screenshots/
 
 frontend/mobile-demo/node_modules/
 frontend/mobile-demo/dist/
 frontend/mobile-demo/dist-web/
 frontend/mobile-demo/.expo/
 frontend/mobile-demo/.expo-shared/
+frontend/mobile-demo/playwright-report/
+frontend/mobile-demo/test-results/
+frontend/mobile-demo/screenshots/
 frontend/mobile-demo/.env
 frontend/mobile-demo/.env.*
 !frontend/mobile-demo/.env.example

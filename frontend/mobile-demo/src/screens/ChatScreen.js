@@ -84,10 +84,14 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
           missingData: response.missing_data || [],
           riskFlags: response.risk_flags || [],
           toolsUsed: response.tools_used || [],
+          whatUsed: response.what_used || [],
           summaryCards: response.summary_cards || [],
           visualBlocks: response.visual_blocks || [],
           agentDocket: response.agent_docket || [],
-          whatUsed: response.what_used || []
+          provider: response.provider,
+          usedFallback: response.used_fallback,
+          confidence: response.confidence,
+          suggestedPrompts: response.suggested_prompts || []
         }
       ]);
     } catch (err) {
@@ -402,7 +406,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
         {attachments.length ? <AttachmentTray attachments={attachments} onRemove={(index) => setAttachments((items) => items.filter((_, i) => i !== index))} /> : null}
         {uploadStatus ? <Text style={styles.uploadStatus}>{uploadStatus}</Text> : null}
         <View style={styles.inputRow}>
-          <Pressable accessibilityLabel="Add attachment" style={[styles.plusButton, attachmentMenuOpen && styles.plusButtonActive]} onPress={openAttachmentMenu}>
+          <Pressable accessibilityLabel="Add context" style={[styles.plusButton, attachmentMenuOpen && styles.plusButtonActive]} onPress={openAttachmentMenu}>
             <Ionicons name="add" size={22} color={palette.green} />
           </Pressable>
           <TextInput
@@ -444,7 +448,7 @@ function AttachmentMenu({ onPick, onClose, canExport }) {
     <View style={styles.attachmentMenu}>
       <View style={styles.attachmentMenuHeader}>
         <Text style={styles.attachmentMenuTitle}>Add context</Text>
-        <Pressable accessibilityLabel="Close attachment menu" style={styles.attachmentMenuClose} onPress={onClose}>
+        <Pressable accessibilityLabel="Close sheet" style={styles.attachmentMenuClose} onPress={onClose}>
           <Ionicons name="close" size={15} color={palette.muted} />
         </Pressable>
       </View>
@@ -548,7 +552,16 @@ function ExportReviewModal({ visible, loading, exportData, status, onClose, onCo
 
 function MessageBubble({ message }) {
   const isUser = message.role === "user";
-  const hasMeta = !isUser && (message.missingData?.length || message.riskFlags?.length || message.summaryCards?.length || message.toolsUsed?.length || message.visualBlocks?.length);
+  const hasMeta = !isUser && (
+    message.missingData?.length ||
+    message.riskFlags?.length ||
+    message.summaryCards?.length ||
+    message.toolsUsed?.length ||
+    message.whatUsed?.length ||
+    message.visualBlocks?.length ||
+    message.suggestedPrompts?.length ||
+    typeof message.confidence === "number"
+  );
   return (
     <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
       <Text style={[styles.bubbleText, isUser && styles.userBubbleText]}>{message.content}</Text>
@@ -568,11 +581,29 @@ function MessageBubble({ message }) {
 }
 
 function AssistantMetadata({ message }) {
+  const sourceLabels = message.whatUsed?.length ? message.whatUsed : (message.toolsUsed || []).map((tool) => tool.name?.replace(/_/g, " "));
+  const confidence = typeof message.confidence === "number" ? Math.round(message.confidence * 100) : null;
   return (
     <View style={styles.metaWrap}>
+      <View style={styles.metaSourceRow}>
+        {confidence !== null ? (
+          <View style={styles.sourceChip}>
+            <Ionicons name="speedometer-outline" size={12} color={palette.green} />
+            <Text style={styles.sourceChipText}>{confidence}% confidence</Text>
+          </View>
+        ) : null}
+        {message.provider ? (
+          <View style={[styles.sourceChip, message.usedFallback && styles.sourceChipWarn]}>
+            <Ionicons name={message.usedFallback ? "shield-checkmark-outline" : "sparkles-outline"} size={12} color={message.usedFallback ? "#B45309" : palette.green} />
+            <Text style={[styles.sourceChipText, message.usedFallback && styles.sourceChipTextWarn]}>
+              {message.usedFallback ? "Guarded fallback" : message.provider}
+            </Text>
+          </View>
+        ) : null}
+      </View>
       {message.summaryCards?.length ? (
         <View style={styles.metaCards}>
-          {message.summaryCards.slice(0, 4).map((card, index) => (
+          {message.summaryCards.slice(0, 5).map((card, index) => (
             <View key={`${card.label}-${index}`} style={styles.metaCard}>
               <Text style={styles.metaLabel}>{card.label}</Text>
               <Text style={[styles.metaValue, card.tone === "risk" && styles.metaRisk, card.tone === "warn" && styles.metaWarn]} numberOfLines={1}>
@@ -588,13 +619,28 @@ function AssistantMetadata({ message }) {
           <Text style={styles.metaText}>Missing: {message.missingData.slice(0, 3).join(", ")}</Text>
         </View>
       ) : null}
-      {message.toolsUsed?.length ? (
+      {message.riskFlags?.length ? (
+        <View style={styles.metaLine}>
+          <Ionicons name="warning-outline" size={13} color="#B45309" />
+          <Text style={styles.metaText}>Watch: {message.riskFlags.slice(0, 2).join("; ")}</Text>
+        </View>
+      ) : null}
+      {sourceLabels?.length ? (
         <View style={styles.metaLine}>
           <Ionicons name="construct-outline" size={13} color={palette.green} />
-          <Text style={styles.metaText}>Checked: {message.toolsUsed.map((tool) => tool.name.replace("get_", "")).slice(0, 3).join(", ")}</Text>
+          <Text style={styles.metaText}>Used: {sourceLabels.slice(0, 4).join(", ")}</Text>
         </View>
       ) : null}
       {message.visualBlocks?.length ? <AssistantVisualBlocks blocks={message.visualBlocks} /> : null}
+      {message.suggestedPrompts?.length ? (
+        <View style={styles.promptRail}>
+          {message.suggestedPrompts.slice(0, 3).map((prompt) => (
+            <View key={prompt} style={styles.promptChip}>
+              <Text style={styles.promptChipText}>{prompt}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -602,7 +648,7 @@ function AssistantMetadata({ message }) {
 function AssistantVisualBlocks({ blocks }) {
   return (
     <View style={styles.visualBlocks}>
-      {blocks.slice(0, 4).map((block, index) => {
+      {blocks.slice(0, 6).map((block, index) => {
         if (block.type === "score_bar") {
           const value = Math.max(0, Math.min(100, Number(block.value || 0)));
           return (
@@ -621,7 +667,7 @@ function AssistantVisualBlocks({ blocks }) {
           return (
             <View key={`${block.title}-${index}`} style={styles.visualBlock}>
               <Text style={styles.visualTitle}>{block.title}</Text>
-              {(block.rows || []).slice(0, 4).map((row) => (
+              {(block.rows || []).slice(0, 5).map((row) => (
                 <View key={`${row[0]}-${row[1]}`} style={styles.visualRow}>
                   <Text style={styles.visualKey}>{row[0]}</Text>
                   <Text style={styles.visualCell}>{row[1]}</Text>
@@ -1051,6 +1097,34 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#EEF4EF"
   },
+  metaSourceRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6
+  },
+  sourceChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#D7EEDF",
+    backgroundColor: "#F4FFF7",
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4
+  },
+  sourceChipWarn: {
+    borderColor: "#F3DCA8",
+    backgroundColor: "#FFFBEB"
+  },
+  sourceChipText: {
+    color: palette.green,
+    fontSize: 9,
+    fontWeight: "900"
+  },
+  sourceChipTextWarn: {
+    color: "#B45309"
+  },
   visualBlocks: {
     gap: 8,
     marginTop: 3
@@ -1189,6 +1263,25 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
     fontWeight: "800"
+  },
+  promptRail: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 2
+  },
+  promptChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E4EEE5",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 8,
+    paddingVertical: 5
+  },
+  promptChipText: {
+    color: palette.dark,
+    fontSize: 9,
+    fontWeight: "900"
   },
   thinkingRow: {
     flexDirection: "row",

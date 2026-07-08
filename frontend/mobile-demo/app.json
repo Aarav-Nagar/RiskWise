@@ -44,6 +44,12 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#092524"
       }
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3e39a270-fce9-4c0c-9627-1d774b8bb09d"
+      }
+    },
+    "owner": "aaravn"
   }
 }

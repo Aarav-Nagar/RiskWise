@@ -48,11 +48,12 @@ Older journal, arena, growth, learn, and alert ideas are not active product tabs
 
 ## Current Priority Order
 
-1. Make Check reliable end to end.
-2. Make screenshot/manual contract extraction real and user-confirmed.
-3. Make RiskWiseAI answer selected-check and Deep Analysis questions specifically.
-4. Confirm profile edits, saved checks, chat history, and uploads persist.
-5. Finish TestFlight prep after local smoke tests pass.
+1. Keep the refreshed Check screen reliable end to end.
+2. Preserve real screenshot/manual contract extraction: no random fake fields, user confirmation required, missing fields shown.
+3. Keep Check backend responses structured: field errors, extraction status, data-quality labels, summary panel, and selected Coach context.
+4. Make RiskWiseAI answer selected-check and Deep Analysis questions specifically.
+5. Confirm profile edits, saved checks, chat history, and uploads persist against real Mongo/Clerk.
+6. Finish TestFlight prep after local smoke tests pass.
 
 ## Fast Verification Commands
 
@@ -98,7 +99,11 @@ The EAS commands require Expo/EAS login and Apple Developer access.
 
 - `frontend/mobile-demo/node_modules`
 - `frontend/mobile-demo/dist`
+- `frontend/mobile-demo/dist-web`
 - `frontend/mobile-demo/.expo`
+- `frontend/mobile-demo/playwright-report`
+- `frontend/mobile-demo/test-results`
+- `frontend/mobile-demo/screenshots`
 - `backend/api/evals/results`
 - `trading-research/arena/figures`
 - old generated root screenshots named `riskwise-*.png`

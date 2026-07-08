@@ -161,7 +161,27 @@ async function installBackendMocks(page) {
         confidence: 0.74,
         missing_data: ["IV", "Greeks", "bid/ask", "open interest", "volume", "earnings date", "current option price"],
         risk_flags: ["missing live options data"],
-        tools_used: []
+        tools_used: [{ name: "retrieve_selected_trade" }, { name: "detect_missing_data" }],
+        what_used: ["selected-trade retriever", "missing-data detector"],
+        provider: "fallback",
+        used_fallback: true,
+        summary_cards: [
+          { label: "Weakest link", value: "Liquidity Context", tone: "warn" },
+          { label: "Max loss", value: "$125", tone: "risk" },
+          { label: "DTE", value: "35d", tone: "neutral" }
+        ],
+        visual_blocks: [
+          {
+            type: "mini_table",
+            title: "Watch next",
+            rows: [
+              ["First pressure", "Liquidity Context"],
+              ["Missing proof", "bid/ask, IV, open interest"],
+              ["Sizing test", "2% of account"]
+            ]
+          }
+        ],
+        suggested_prompts: ["Debate this setup", "What can break this trade?", "Check my position size"]
       });
     }
 

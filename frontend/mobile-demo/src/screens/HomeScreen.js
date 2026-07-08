@@ -1,5 +1,5 @@
 import React from "react";
-import { Image, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, Linking, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
 import { Header, money, ScreenScroll, sharedText } from "../components/Shared";
@@ -57,7 +57,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
   const startingStock = findStock(draft.ticker) || stockUniverse[1];
   const [query, setQuery] = React.useState(startingStock.symbol);
   const [selectedStock, setSelectedStock] = React.useState(startingStock);
-  const [marketBundle, setMarketBundle] = React.useState({ quote: null, profile: null, news: null, earnings: null });
+  const [marketBundle, setMarketBundle] = React.useState({ quote: null, profile: null, news: null, earnings: null, optionsContext: null });
   const [marketLoading, setMarketLoading] = React.useState(false);
   const [providerStatus, setProviderStatus] = React.useState(null);
   const [remoteMatches, setRemoteMatches] = React.useState([]);
@@ -104,7 +104,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
         }
       } catch (error) {
         if (mounted) {
-          setMarketBundle({ quote: null, profile: null, news: null, earnings: null });
+          setMarketBundle({ quote: null, profile: null, news: null, earnings: null, optionsContext: null });
         }
       } finally {
         if (mounted) {
@@ -216,6 +216,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
       </Card>
 
       <MarketSnapshot stock={selectedStock} quote={quote} earnings={earnings} loading={marketLoading} />
+      <OptionsReadinessCard stock={selectedStock} context={marketBundle.optionsContext} loading={marketLoading} />
       <DataStatusCard status={providerStatus} />
 
       <Card>
@@ -314,6 +315,8 @@ function DataStatusCard({ status }) {
 }
 
 function MarketSnapshot({ stock, quote, earnings, loading }) {
+  const { width } = useWindowDimensions();
+  const compactGrid = width < 360;
   const nextEarnings = earnings[0];
   const change = Number(quote?.changePercentage || 0);
   const changeText = quote?.price ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "Pending";
@@ -329,18 +332,54 @@ function MarketSnapshot({ stock, quote, earnings, loading }) {
         </View>
       </View>
       <View style={styles.snapshotGrid}>
-        <MiniDatum label="Day range" value={quote?.dayLow && quote?.dayHigh ? `$${Number(quote.dayLow).toFixed(2)} - $${Number(quote.dayHigh).toFixed(2)}` : "Not available"} />
-        <MiniDatum label="Volume" value={quote?.volume ? shortNumber(quote.volume) : "Not available"} />
-        <MiniDatum label="Market cap" value={quote?.marketCap ? shortMoney(quote.marketCap) : "Not available"} />
-        <MiniDatum label="Earnings" value={nextEarnings?.date || "No date found"} />
+        <MiniDatum compact={compactGrid} label="Day range" value={quote?.dayLow && quote?.dayHigh ? `$${Number(quote.dayLow).toFixed(2)} - $${Number(quote.dayHigh).toFixed(2)}` : "Not available"} />
+        <MiniDatum compact={compactGrid} label="Volume" value={quote?.volume ? shortNumber(quote.volume) : "Not available"} />
+        <MiniDatum compact={compactGrid} label="Market cap" value={quote?.marketCap ? shortMoney(quote.marketCap) : "Not available"} />
+        <MiniDatum compact={compactGrid} label="Earnings" value={nextEarnings?.date || "No date found"} />
       </View>
     </Card>
   );
 }
 
-function MiniDatum({ label, value }) {
+function OptionsReadinessCard({ stock, context, loading }) {
+  const pending = Array.isArray(context?.fields_pending) ? context.fields_pending : [];
+  const ready = context?.status && !["needs_provider_key", "requires_options_provider"].includes(context.status);
+  const title = loading
+    ? "Checking option data..."
+    : ready
+      ? `${stock?.symbol || "Ticker"} options context attached`
+      : `${stock?.symbol || "Ticker"} needs option-chain proof`;
+  const provider = context?.provider || (loading ? "loading" : "not attached");
+  const pendingLabels = pending.length ? pending.slice(0, 5).map(friendlyField) : ["Bid/ask", "IV", "Greeks", "Volume", "Open interest"];
   return (
-    <View style={styles.miniDatum}>
+    <Card style={styles.optionsReadinessCard}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.eyebrow}>Options readiness</Text>
+          <Text style={styles.optionsReadinessTitle}>{title}</Text>
+        </View>
+        <View style={[styles.optionsStatusPill, !ready && styles.optionsStatusPillWarn]}>
+          <Text style={[styles.optionsStatusText, !ready && styles.optionsStatusTextWarn]}>{provider.replace(/_/g, " ")}</Text>
+        </View>
+      </View>
+      <View style={styles.dataFieldRow}>
+        {pendingLabels.map((field) => (
+          <View key={field} style={[styles.dataFieldChip, styles.optionsMissingChip]}>
+            <Ionicons name={ready && !pending.length ? "checkmark-circle-outline" : "ellipse-outline"} size={13} color={ready && !pending.length ? palette.green : "#B45309"} />
+            <Text style={styles.dataFieldText}>{field}</Text>
+          </View>
+        ))}
+      </View>
+      <Text style={styles.dataStatusCopy}>
+        {context?.message || "RiskWise can review structure with manual contract inputs, but it will not invent live premium, IV, Greeks, bid/ask, volume, or open interest."}
+      </Text>
+    </Card>
+  );
+}
+
+function MiniDatum({ label, value, compact }) {
+  return (
+    <View style={[styles.miniDatum, compact && styles.miniDatumCompact]}>
       <Text style={styles.miniDatumLabel}>{label}</Text>
       <Text style={styles.miniDatumValue} numberOfLines={1}>{value}</Text>
     </View>
@@ -513,6 +552,14 @@ function shortMoney(value) {
   return `$${shortNumber(value)}`;
 }
 
+function friendlyField(value) {
+  const clean = String(value || "").replace(/_/g, " ");
+  if (clean.toLowerCase() === "bid ask") return "Bid/ask";
+  if (clean.toLowerCase() === "implied volatility") return "IV";
+  if (clean.toLowerCase() === "provider reported greeks") return "Provider Greeks";
+  return clean.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 const styles = StyleSheet.create({
   selectorCard: {
     backgroundColor: "#FBFFFC"
@@ -645,6 +692,41 @@ const styles = StyleSheet.create({
     backgroundColor: "#FBFFFC",
     borderColor: "#DDF3E3"
   },
+  optionsReadinessCard: {
+    backgroundColor: "#FFFCF4",
+    borderColor: "#F2DFA8"
+  },
+  optionsReadinessTitle: {
+    color: palette.dark,
+    fontSize: 16,
+    fontWeight: "900",
+    maxWidth: 235
+  },
+  optionsStatusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: palette.greenSoft,
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    maxWidth: 130
+  },
+  optionsStatusPillWarn: {
+    backgroundColor: "#FFF7E6",
+    borderColor: "#F1D39A"
+  },
+  optionsStatusText: {
+    color: palette.green,
+    fontSize: 9,
+    fontWeight: "900",
+    textTransform: "capitalize"
+  },
+  optionsStatusTextWarn: {
+    color: "#B45309"
+  },
+  optionsMissingChip: {
+    backgroundColor: "#FFFFFF"
+  },
   dataStatusTitle: {
     color: palette.dark,
     fontSize: 16,
@@ -745,6 +827,9 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     backgroundColor: "#FBFCFB",
     padding: 10
+  },
+  miniDatumCompact: {
+    width: "100%"
   },
   miniDatumLabel: {
     color: palette.muted,

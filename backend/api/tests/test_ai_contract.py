@@ -556,6 +556,21 @@ def test_selected_trade_missing_data_names_contract_fields() -> None:
     assert "missing live data" in blocks
 
 
+def test_selected_trade_review_surfaces_watch_next_context() -> None:
+    response = asyncio.run(answer_chat("Review this setup", current_report=selected_trade_fixture(), chat_mode="Review"))
+    cards = {card["label"]: card["value"] for card in response["summary_cards"]}
+    blocks = {block["title"]: block for block in response["visual_blocks"] if block.get("title")}
+    watch_next = str(blocks.get("Watch next", {})).lower()
+
+    assert response["mode"] == "trade_review"
+    assert cards["DTE"] == "3d"
+    assert cards["Acct risk"] == "4.3%"
+    assert "breakeven move" in watch_next
+    assert "3.4% move needed" in watch_next
+    assert "3 days left" in watch_next
+    assert "bid/ask" in watch_next
+
+
 def test_selected_trade_context_packet_is_source_ranked() -> None:
     profile = {
         "accountSize": 5000,

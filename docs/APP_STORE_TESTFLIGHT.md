@@ -33,6 +33,7 @@ RiskWise can be prepared for TestFlight from this repo, but the final upload req
 3. Confirm the bundle identifier `com.aaravnagar.riskwise` is available in Apple Developer.
 4. Host the privacy policy and terms somewhere public before public App Store submission.
 5. Confirm production backend URL and environment variables are set.
+   Use `docs/PRODUCTION_ENVIRONMENT.md` as the source of truth for Render, Clerk, EAS, AI, and market-data variables.
 6. Run the full local verification set:
 
    ```bash
@@ -103,3 +104,5 @@ Codex can prepare config, code, docs, and tests. Aarav must still own:
 - final TestFlight submission approval
 - real iPhone testing
 - final privacy/terms legal review
+- production Clerk creation or explicit internal-only approval for development Clerk
+- secret rotation after setup values have been shared

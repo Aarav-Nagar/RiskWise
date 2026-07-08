@@ -14,6 +14,8 @@ test("active app surfaces render without blank states or generic error cards", a
   await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
   await expect(page.getByText(/Good morning/)).toBeVisible();
   await expect(page.getByText("Market snapshot")).toBeVisible();
+  await expect(page.getByText("Options readiness")).toBeVisible();
+  await expect(page.getByText(/needs option-chain proof|options context attached/)).toBeVisible();
   await expect(page.getByText("Data transparency")).toBeVisible();
   await expect(page.getByText(/source ready|sources ready|Backend status pending/)).toBeVisible();
   await expect(page.getByText(/Full|Quote/).first()).toBeVisible();
@@ -23,10 +25,10 @@ test("active app surfaces render without blank states or generic error cards", a
   await page.getByText("Coach", { exact: true }).last().click();
   await expect(page.getByText(/Hi,/)).toBeVisible();
   await expect(page.getByPlaceholder("Ask RiskWiseAI")).toBeVisible();
-  await page.getByLabel("Add attachment").click();
+  await page.getByLabel("Add context").click();
   await expect(page.getByText("Add context")).toBeVisible();
   await expect(page.getByText("Deep Analysis")).toBeVisible();
-  await page.getByLabel("Close attachment menu").click();
+  await page.getByLabel("Close sheet").click();
 
   await page.getByText("Check", { exact: true }).last().click();
   await expect(page.getByText("How would you like to check a trade?")).toBeVisible();
@@ -42,5 +44,24 @@ test("active app surfaces render without blank states or generic error cards", a
 
   const bodyText = await page.locator("body").innerText();
   expect(bodyText.length).toBeGreaterThan(500);
+  expect(filteredErrors(errors)).toBe("");
+});
+
+test("home market snapshot stacks cleanly on very small phones", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 780 });
+  const errors = collectBrowserErrors(page);
+
+  await installBackendMocks(page);
+  await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
+  await expect(page.getByText(/Good morning/)).toBeVisible();
+  await expect(page.getByText("Market snapshot")).toBeVisible();
+
+  const dayRangeBox = await page.getByText("Day range", { exact: true }).boundingBox();
+  const volumeBox = await page.getByText("Volume", { exact: true }).first().boundingBox();
+  expect(dayRangeBox).toBeTruthy();
+  expect(volumeBox).toBeTruthy();
+  expect(volumeBox.x).toBeLessThanOrEqual(dayRangeBox.x + 8);
+  expect(volumeBox.y).toBeGreaterThan(dayRangeBox.y);
+
   expect(filteredErrors(errors)).toBe("");
 });

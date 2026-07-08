@@ -1238,8 +1238,17 @@ def report_review_response(message: str, current_report: dict[str, Any], attachm
         {"label": "Max loss", "value": max_loss, "tone": "risk"},
         {"label": "Breakeven move", "value": f"{required_move}%" if required_move is not None else "Unknown", "tone": "neutral"},
     ]
+    if dte is not None:
+        cards.append({"label": "DTE", "value": f"{dte}d", "tone": "warn" if number_from_any(dte) is not None and float(dte) <= 7 else "neutral"})
+    if account_risk_pct is not None:
+        cards.append({"label": "Acct risk", "value": f"{float(account_risk_pct):g}%", "tone": "warn" if float(account_risk_pct) > 2 else "good"})
     blocks = [
         {"type": "score_bar", "title": "Setup Quality", "value": setup_score, "tone": "good" if setup_score >= 75 else "warn"},
+        {
+            "type": "mini_table",
+            "title": "Watch next",
+            "rows": report_watch_next_rows(current_report, missing_fields),
+        },
         {
             "type": "mini_table",
             "title": "Debate summary",
@@ -1275,6 +1284,26 @@ def report_missing_contract_fields(report: dict[str, Any]) -> list[str]:
         if is_missing and label not in missing:
             missing.append(label)
     return missing
+
+
+def report_watch_next_rows(report: dict[str, Any], missing_fields: list[str]) -> list[list[str]]:
+    risk_math = report.get("riskMath") or report.get("risk_math") or {}
+    debate = report.get("setupDebate") or report.get("setup_debate") or {}
+    weakest = report.get("weakestLink") or report.get("weakest_link") or "weakest link"
+    required_move = risk_math.get("required_move_to_breakeven_pct")
+    dte = risk_math.get("calendar_days_left") or risk_math.get("trading_days_left") or risk_math.get("days_to_expiration")
+    account_risk_pct = risk_math.get("account_risk_pct") or risk_math.get("risk_percent_of_account")
+    rows = [
+        ["First pressure", str(weakest)],
+        ["Breakeven test", f"{required_move}% move needed" if required_move is not None else "Needs premium plus underlying price"],
+        ["Time test", f"{dte} days left" if dte is not None else "Expiration/DTE not confirmed"],
+        ["Sizing test", f"{float(account_risk_pct):g}% of account" if account_risk_pct is not None else "Account-risk percent unknown"],
+        ["Missing proof", ", ".join(missing_fields[:3]) or "No missing fields flagged"],
+    ]
+    invalidation = debate.get("risk_judge") or report.get("invalidation") or report.get("tradeThesis", {}).get("invalidation")
+    if invalidation:
+        rows.append(["Invalidation", str(invalidation)])
+    return rows
 
 
 def general_finance_response(message: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:

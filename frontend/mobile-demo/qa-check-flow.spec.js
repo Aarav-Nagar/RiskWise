@@ -84,7 +84,10 @@ test("completed check becomes selected Coach context", async ({ page }) => {
   await expect(page.getByText(/ACHR/i).first()).toBeVisible();
   await page.getByPlaceholder("Ask RiskWiseAI").fill("What trade did I do?");
   await page.getByLabel("Send message").click();
-  await expect(page.getByText(/ACHR.*Call Option/i)).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText(/QA smoke response: You selected ACHR/i)).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText("Watch next")).toBeVisible();
+  await expect(page.getByText(/Used: selected-trade retriever, missing-data detector/i)).toBeVisible();
+  await expect(page.getByText("Guarded fallback")).toBeVisible();
 
   expect(filteredErrors(errors)).toBe("");
 });
