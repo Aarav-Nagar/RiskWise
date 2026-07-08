@@ -15,10 +15,13 @@ from .models import (
     ChatThreadResponse,
     ClerkSyncRequest,
     CompanyProfileResponse,
+    ContractExtractionRequest,
+    ContractExtractionResponse,
     EarningsResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     MarketNewsResponse,
+    MarketProviderStatusResponse,
     MarketQuoteResponse,
     MarketSearchResponse,
     OptionsContextResponse,
@@ -26,6 +29,7 @@ from .models import (
     ProfileUpdateRequest,
     ReadyResponse,
     SavedCheckRequest,
+    SavedCheckExportResponse,
     SavedCheckResponse,
     SigninRequest,
     SignupRequest,
@@ -34,16 +38,24 @@ from .models import (
     UserResponse,
 )
 from .scoring import parse_expiration_date, score_trade_check
-from .services.llm import answer_chat
+from .services.llm import answer_chat, extract_contract_from_uploads
+from .services.check_export import build_saved_check_export
 from .services.llm_provider import configured_providers
-from .services.market_data import company_profile, earnings_calendar, market_quote, market_search, options_chain, options_context, options_contract_context, options_expirations, stock_news
+from .services.market_data import company_profile, earnings_calendar, market_provider_status, market_quote, market_search, options_chain, options_context, options_contract_context, options_expirations, stock_news
+from .services.auth import auth_config_status, require_clerk_subject, require_profile_lookup_owner, require_request_user
 from .services.store import clean_email, store
 from .settings import settings
 
 if settings.sentry_dsn:
     sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.environment, traces_sample_rate=0.05)
 
-app = FastAPI(title="Options Risk Check API", version="0.3.0")
+app = FastAPI(
+    title="Options Risk Check API",
+    version="0.3.0",
+    docs_url=None if settings.environment == "production" else "/docs",
+    redoc_url=None if settings.environment == "production" else "/redoc",
+    openapi_url=None if settings.environment == "production" else "/openapi.json",
+)
 
 _rate_limit_hits: dict[tuple[str, str], list[float]] = {}
 _rate_limits = {
@@ -54,15 +66,8 @@ _rate_limits = {
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:8081",
-        "http://localhost:8081",
-        "http://127.0.0.1:8091",
-        "http://localhost:8091",
-        "http://127.0.0.1:8092",
-        "http://localhost:8092",
-    ],
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
+    allow_origins=settings.allowed_cors_origins,
+    allow_origin_regex=None if settings.environment == "production" else r"^http://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -122,22 +127,109 @@ def ready() -> ReadyResponse:
     storage_status = store.status()
     llm_status = configured_providers()
     any_external_llm = any(
-        item["configured"] and item["provider"] != "fallback" and not item.get("cooling_down")
+        item["configured"]
+        and item["provider"] != "fallback"
+        and not item.get("cooling_down")
+        and item.get("status") in {"ready", "configured_unverified"}
         for item in llm_status
     )
-    is_ready = bool(storage_status.get("ready")) and any_external_llm
+    fallback_ready = any(item["provider"] == "fallback" and item["configured"] for item in llm_status)
+    market_status = market_provider_status()
+    auth_status = auth_config_status()
+    auth_ready = auth_status["configured"] or settings.environment != "production"
+    sentry_ready = bool(settings.sentry_dsn) or settings.environment != "production"
+    ai_ready = any_external_llm or fallback_ready
+    is_ready = bool(storage_status.get("ready")) and auth_ready and sentry_ready and ai_ready
     return ReadyResponse(
         status="ready" if is_ready else "degraded",
         environment=settings.environment,
         storage=storage_status,
         llm=llm_status,
         market_data={
-            "provider": settings.market_data_provider,
-            "configured": bool(settings.fmp_api_key or settings.polygon_api_key)
-            if settings.market_data_provider in {"fmp", "polygon", "massive", "hybrid"}
-            else settings.market_data_provider == "disabled",
+            "status": market_status.status,
+            "strategy": market_status.strategy,
+            "ai_ready": ai_ready,
+            "fallback_available": fallback_ready,
+            "sentry_configured": sentry_ready,
+            "providers": [item.model_dump() for item in market_status.capabilities],
         },
+        auth=auth_status,
     )
+
+
+@app.get("/ai/providers")
+def ai_providers() -> dict[str, object]:
+    providers = configured_providers()
+    ready_provider = next(
+        (
+            item
+            for item in providers
+            if item["provider"] != "fallback"
+            and item["configured"]
+            and not item.get("cooling_down")
+            and item.get("status") == "ready"
+        ),
+        None,
+    )
+    fallback = next((item for item in providers if item["provider"] == "fallback"), None)
+    active = ready_provider or fallback
+    return {
+        "status": "active" if ready_provider else "fallback_ready",
+        "active_provider": active["provider"] if active else "fallback",
+        "active_kind": active.get("kind") if active else "deterministic",
+        "provider_order": settings.llm_provider_order,
+        "providers": providers,
+        "fallback_available": True,
+        "message": (
+            "RiskWiseAI uses local/hosted providers when available, then falls back to a deterministic "
+            "tool-first options coach so the app remains usable."
+        ),
+    }
+
+
+@app.get("/ai/smoke")
+async def ai_smoke() -> dict[str, object]:
+    prompts = [
+        ("Greeting", "hi", None, "quick"),
+        ("Concept", "What is IV crush?", None, "standard"),
+        ("Trade review", "What about this trade?", smoke_report(), "standard"),
+        ("Deep analysis", "Run deep analysis", smoke_report(), "deep_analysis"),
+    ]
+    results = []
+    started = time.monotonic()
+    for label, prompt, report, depth in prompts:
+        item_started = time.monotonic()
+        response = await answer_chat(
+            prompt,
+            current_report=report,
+            user_profile={"experienceLevel": "Some experience", "riskStyle": "Balanced"},
+            chat_mode="Review" if report else "Explain",
+            analysis_depth=depth,
+        )
+        results.append(
+            {
+                "label": label,
+                "prompt": prompt,
+                "mode": response.get("mode"),
+                "analysis_depth": response.get("analysis_depth"),
+                "provider": response.get("provider"),
+                "model": response.get("model"),
+                "used_fallback": response.get("used_fallback"),
+                "latency_ms": int(round((time.monotonic() - item_started) * 1000)),
+                "has_answer": bool(str(response.get("answer") or "").strip()),
+                "agent_count": len(response.get("agent_docket") or []),
+                "missing_data_count": len(response.get("missing_data") or []),
+            }
+        )
+    passed = sum(1 for item in results if item["has_answer"])
+    return {
+        "status": "pass" if passed == len(results) else "degraded",
+        "passed": passed,
+        "total": len(results),
+        "latency_ms": int(round((time.monotonic() - started) * 1000)),
+        "providers": configured_providers(),
+        "results": results,
+    }
 
 
 @app.post("/auth/signup", response_model=UserResponse)
@@ -157,7 +249,8 @@ def signin(request: SigninRequest) -> UserResponse:
 
 
 @app.post("/auth/clerk-sync", response_model=UserResponse)
-def clerk_sync(request: ClerkSyncRequest) -> UserResponse:
+def clerk_sync(request: ClerkSyncRequest, http_request: Request) -> UserResponse:
+    require_clerk_subject(request.clerkId, http_request)
     try:
         return UserResponse(**store.sync_clerk_user(request))
     except ValueError as exc:
@@ -165,16 +258,17 @@ def clerk_sync(request: ClerkSyncRequest) -> UserResponse:
 
 
 @app.get("/auth/profile-by-email", response_model=UserResponse)
-def profile_by_email(email: str) -> UserResponse:
+def profile_by_email(email: str, http_request: Request) -> UserResponse:
     user = store.find_user_by_email(email)
     if not user:
         raise HTTPException(status_code=404, detail="No app profile exists for this Clerk account yet.")
+    require_profile_lookup_owner(user, http_request)
     return UserResponse(**user)
 
 
 @app.patch("/auth/users/{user_id}/profile", response_model=UserResponse)
-def update_profile(user_id: str, request: ProfileUpdateRequest) -> UserResponse:
-    require_request_user(user_id)
+def update_profile(user_id: str, request: ProfileUpdateRequest, http_request: Request) -> UserResponse:
+    require_request_user(user_id, http_request)
     try:
         updates = request.model_dump(exclude_unset=True)
         return UserResponse(**store.update_user_profile(user_id, updates))
@@ -183,8 +277,8 @@ def update_profile(user_id: str, request: ProfileUpdateRequest) -> UserResponse:
 
 
 @app.delete("/auth/users/{user_id}")
-def delete_user(user_id: str) -> dict[str, str | bool]:
-    require_request_user(user_id)
+def delete_user(user_id: str, http_request: Request) -> dict[str, str | bool]:
+    require_request_user(user_id, http_request)
     try:
         return store.delete_user(user_id)
     except ValueError as exc:
@@ -192,8 +286,8 @@ def delete_user(user_id: str) -> dict[str, str | bool]:
 
 
 @app.delete("/auth/users/{user_id}/context")
-def clear_user_context(user_id: str) -> dict[str, str | bool]:
-    require_request_user(user_id)
+def clear_user_context(user_id: str, http_request: Request) -> dict[str, str | bool]:
+    require_request_user(user_id, http_request)
     try:
         return store.clear_user_context(user_id)
     except ValueError as exc:
@@ -201,8 +295,8 @@ def clear_user_context(user_id: str) -> dict[str, str | bool]:
 
 
 @app.get("/auth/users/{user_id}/context-summary")
-def user_context_summary(user_id: str) -> dict[str, int]:
-    require_request_user(user_id)
+def user_context_summary(user_id: str, http_request: Request) -> dict[str, int]:
+    require_request_user(user_id, http_request)
     return store.context_summary(user_id)
 
 
@@ -218,8 +312,8 @@ def forgot_password(request: ForgotPasswordRequest) -> ForgotPasswordResponse:
 
 
 @app.post("/trade-check", response_model=TradeCheckResponse)
-def trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
-    require_user_id(request.user_id)
+def trade_check(request: TradeCheckRequest, http_request: Request) -> TradeCheckResponse:
+    require_request_user(request.user_id, http_request)
     expiration = parse_expiration_date(request.expiration)
     if expiration is None:
         raise HTTPException(status_code=400, detail="Choose a valid future expiration date.")
@@ -232,21 +326,31 @@ def trade_check(request: TradeCheckRequest) -> TradeCheckResponse:
 
 
 @app.get("/saved-checks/{user_id}", response_model=list[SavedCheckResponse])
-def saved_checks(user_id: str) -> list[SavedCheckResponse]:
-    require_user_id(user_id)
+def saved_checks(user_id: str, http_request: Request) -> list[SavedCheckResponse]:
+    require_request_user(user_id, http_request)
     return [SavedCheckResponse(**item) for item in store.list_saved_checks(user_id)]
 
 
 @app.post("/saved-checks", response_model=SavedCheckResponse)
-def save_check(request: SavedCheckRequest) -> SavedCheckResponse:
-    require_user_id(request.user_id)
+def save_check(request: SavedCheckRequest, http_request: Request) -> SavedCheckResponse:
+    require_request_user(request.user_id, http_request)
     item = store.save_check(request.user_id, request.trade_check_id, request.report, request.note)
     return SavedCheckResponse(**item)
 
 
+@app.get("/saved-checks/{user_id}/{saved_check_id}/export", response_model=SavedCheckExportResponse)
+def export_saved_check(user_id: str, saved_check_id: str, http_request: Request) -> SavedCheckExportResponse:
+    require_request_user(user_id, http_request)
+    item = store.get_saved_check(user_id, saved_check_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="That saved Check was not found.")
+    export = build_saved_check_export(item, store.get_user(user_id) or {})
+    return SavedCheckExportResponse(**export)
+
+
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
-    require_user_id(request.user_id)
+async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
+    require_request_user(request.user_id, http_request)
     history = []
     if request.thread_id:
         history = store.list_chat_messages(request.user_id, request.thread_id)[-10:]
@@ -262,6 +366,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         current_report=request.current_report,
         user_profile=profile_context,
         chat_mode=request.chat_mode,
+        analysis_depth=request.analysis_depth,
         attachments=request.attachments,
         conversation_history=history,
         recent_checks=recent_checks,
@@ -277,21 +382,31 @@ async def chat(request: ChatRequest) -> ChatResponse:
     return ChatResponse(thread_id=thread_id, **coach)
 
 
+@app.post("/extract-contract", response_model=ContractExtractionResponse)
+async def extract_contract(request: ContractExtractionRequest, http_request: Request) -> ContractExtractionResponse:
+    require_request_user(request.user_id, http_request)
+    if not request.attachments:
+        raise HTTPException(status_code=400, detail="Upload a contract screenshot or readable contract text first.")
+    result = await extract_contract_from_uploads(request.attachments)
+    store.save_upload(request.user_id, "check_extraction", request.attachments, result)
+    return ContractExtractionResponse(**result)
+
+
 @app.get("/chat/threads/{user_id}", response_model=list[ChatThreadResponse])
-def chat_threads(user_id: str) -> list[ChatThreadResponse]:
-    require_user_id(user_id)
+def chat_threads(user_id: str, http_request: Request) -> list[ChatThreadResponse]:
+    require_request_user(user_id, http_request)
     return [ChatThreadResponse(**item) for item in store.list_chat_threads(user_id)]
 
 
 @app.get("/chat/threads/{user_id}/{thread_id}", response_model=list[ChatMessageResponse])
-def chat_messages(user_id: str, thread_id: str) -> list[ChatMessageResponse]:
-    require_user_id(user_id)
+def chat_messages(user_id: str, thread_id: str, http_request: Request) -> list[ChatMessageResponse]:
+    require_request_user(user_id, http_request)
     return [ChatMessageResponse(**item) for item in store.list_chat_messages(user_id, thread_id)]
 
 
 @app.post("/chat/feedback", response_model=ChatFeedbackResponse)
-def chat_feedback(request: ChatFeedbackRequest) -> ChatFeedbackResponse:
-    require_user_id(request.user_id)
+def chat_feedback(request: ChatFeedbackRequest, http_request: Request) -> ChatFeedbackResponse:
+    require_request_user(request.user_id, http_request)
     return ChatFeedbackResponse(**store.save_chat_feedback(request))
 
 
@@ -325,6 +440,11 @@ async def earnings_endpoint(ticker: str) -> EarningsResponse:
     return await earnings_calendar(ticker)
 
 
+@app.get("/market/providers", response_model=MarketProviderStatusResponse)
+def market_providers_endpoint() -> MarketProviderStatusResponse:
+    return market_provider_status()
+
+
 @app.get("/market/options/expirations/{ticker}", response_model=OptionsAvailabilityResponse)
 async def options_expirations_endpoint(ticker: str) -> OptionsAvailabilityResponse:
     return await options_expirations(ticker)
@@ -345,31 +465,51 @@ async def options_contract_context_endpoint(
     return await options_contract_context(ticker, expiration, strike, option_side)
 
 
+def smoke_report() -> dict[str, object]:
+    return {
+        "id": "smoke-aapl-call",
+        "ticker": "AAPL",
+        "tradeType": "Call Option (Long)",
+        "optionSide": "call",
+        "strike": 190,
+        "expiration": "2026-07-12",
+        "premium": 5,
+        "contracts": 1,
+        "amountAtRisk": 500,
+        "setupScore": 72,
+        "weakestLink": "liquidity context",
+        "riskPosture": "Mixed Conviction",
+        "riskMath": {
+            "max_loss": 500,
+            "breakeven": 195,
+            "account_risk_pct": 2.0,
+            "required_move_to_breakeven_pct": 2.63,
+            "dte": 30,
+        },
+        "setupDebate": {
+            "bull": "Defined max loss and manageable breakeven move.",
+            "bear": "Missing bid/ask, IV, volume, and open interest.",
+            "riskJudge": "Sizing fits the rule, but liquidity context is incomplete.",
+        },
+        "dataQuality": {
+            "label": "Partial",
+            "missing": ["bid/ask", "IV", "Greeks", "open interest", "volume"],
+        },
+    }
+
+
 def mask_email(email: str) -> str:
     name, _, domain = email.partition("@")
     return f"{name[:2]}{'*' * max(2, len(name) - 2)}@{domain}" if domain else email
 
 
-def require_user_id(user_id: str | None) -> None:
-    if not user_id or len(str(user_id).strip()) < 3:
-        raise HTTPException(status_code=401, detail="A signed-in RiskWise profile is required for this action.")
-
-
-def require_request_user(user_id: str | None) -> None:
-    require_user_id(user_id)
-    if settings.environment == "production":
-        # The deployed app must send a signed user id header from the authenticated client.
-        # Full Clerk JWT validation is handled at the edge/native auth layer in the next deployment pass.
-        pass
-
-
 def rate_limit_identity(request: Request) -> str:
-    user_header = request.headers.get("X-RiskWise-User-ID") or request.headers.get("X-Clerk-User-ID")
     auth = request.headers.get("Authorization", "")
-    if user_header:
-        return f"user:{user_header.strip()[:80]}"
     if auth.startswith("Bearer "):
         return f"bearer:{auth[-24:]}"
+    user_header = request.headers.get("X-RiskWise-User-ID") or request.headers.get("X-Clerk-User-ID")
+    if user_header and settings.environment != "production":
+        return f"user:{user_header.strip()[:80]}"
     host = request.client.host if request.client else "local"
     return f"ip:{host}"
 
@@ -390,31 +530,67 @@ def merge_profile_context(stored: dict, incoming: dict) -> dict:
 
 
 def ranked_saved_checks(checks: list[dict], message: str, current_report: dict | None) -> list[dict]:
-    """Prefer saved checks that match the user's ticker or selected context."""
+    """Prefer saved checks that match the user's ticker, strategy, topic, or selected context."""
     wanted = ticker_hints(message, current_report)
+    lower_message = message.lower()
+    strategy_terms = {
+        "call": ["call", "long call"],
+        "put": ["put", "long put"],
+        "spread": ["spread", "debit", "credit", "vertical"],
+        "earnings": ["earnings", "event", "iv crush"],
+        "sizing": ["size", "sizing", "risk", "max loss", "drawdown"],
+        "liquidity": ["bid", "ask", "volume", "open interest", "liquidity"],
+    }
+
+    def term_matches(text: str, terms: list[str]) -> bool:
+        return any(term in text for term in terms)
 
     def score(item: dict) -> tuple[int, str]:
         report = item.get("report") if isinstance(item, dict) else {}
-        ticker = str((report or {}).get("ticker") or "").upper()
+        report = report or {}
+        ticker = str(report.get("ticker") or "").upper()
         note = str(item.get("note") or "").upper()
+        searchable = " ".join(
+            [
+                str(report.get("tradeType") or report.get("trade_type") or ""),
+                str(report.get("weakestLink") or report.get("weakest_link") or ""),
+                str(report.get("riskPosture") or report.get("risk_posture") or ""),
+                str(item.get("note") or ""),
+            ]
+        ).lower()
         relevance = 0
         if ticker and ticker in wanted:
-            relevance += 6
+            relevance += 10
         if any(hint and hint in note for hint in wanted):
-            relevance += 2
-        if str((report or {}).get("tradeType") or "").lower() in message.lower():
-            relevance += 1
+            relevance += 4
+        for topic, terms in strategy_terms.items():
+            if term_matches(lower_message, terms) and term_matches(searchable, terms):
+                relevance += 3
+        if current_report and report.get("id") and report.get("id") == current_report.get("id"):
+            relevance += 12
         return relevance, str(item.get("createdAt") or "")
 
-    return sorted(checks, key=score, reverse=True)[:8]
+    ranked = []
+    for item in sorted(checks, key=score, reverse=True)[:8]:
+        relevance, _ = score(item)
+        copy = dict(item)
+        copy["aiRelevanceScore"] = relevance
+        copy["aiRelevanceReason"] = "ticker/topic match" if relevance > 0 else "recent saved check"
+        ranked.append(copy)
+    return ranked
 
 
 def ticker_hints(message: str, current_report: dict | None) -> set[str]:
     hints: set[str] = set()
     if current_report and current_report.get("ticker"):
         hints.add(str(current_report["ticker"]).upper())
+    stop = {
+        "WHAT", "CALL", "PUT", "THE", "AND", "FOR", "RISK", "TRADE", "AFTER", "BEFORE",
+        "WHY", "HOW", "CAN", "YOU", "ARE", "THIS", "THAT", "WITH", "FROM", "WHEN",
+        "IV", "ITM", "OTM", "ATM", "AI", "DTE", "CEO", "CFO", "YOLO", "FOMO",
+    }
     for token in message.replace("$", " ").replace("/", " ").split():
         clean = "".join(char for char in token if char.isalpha()).upper()
-        if 1 <= len(clean) <= 5 and clean not in {"WHAT", "CALL", "PUT", "THE", "AND", "FOR", "RISK", "TRADE"}:
+        if 2 <= len(clean) <= 5 and clean not in stop:
             hints.add(clean)
     return hints

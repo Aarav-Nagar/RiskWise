@@ -6,3 +6,5 @@ pymongo>=4.7
 sentry-sdk[fastapi]>=2.0
 python-dotenv>=1.0
 openai>=2.0
+yfinance>=0.2.40
+PyJWT[crypto]>=2.8

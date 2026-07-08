@@ -10,8 +10,10 @@ Development mode uses an in-memory adapter. Production is designed for Clerk aut
 
 ```bash
 pip install -r api/requirements.txt
-uvicorn api.app:app --reload --host 127.0.0.1 --port 8000
+uvicorn api.app:app --reload --host 127.0.0.1 --port 8000 --ws none
 ```
+
+The API does not use WebSockets. `--ws none` avoids optional WebSocket dependency loading issues in local Windows development.
 
 ## Endpoints
 

@@ -185,8 +185,10 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r api/requirements.txt
-python -m uvicorn api.app:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn api.app:app --reload --host 127.0.0.1 --port 8000 --ws none
 ```
+
+RiskWise does not use WebSockets. The `--ws none` flag keeps local Windows/OneDrive development from failing on optional WebSocket package loading.
 
 On macOS/Linux, use:
 

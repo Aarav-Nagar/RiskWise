@@ -49,3 +49,18 @@ The Report screen opens after a check is generated. It is part of the Check flow
 - The backend is required for account, report, and coach flows.
 - No trade execution is included.
 - Language is framed as educational risk/context, not financial advice.
+
+## TestFlight Prep
+
+The iOS bundle identifier is `com.aaravnagar.riskwise`. TestFlight and production EAS profiles are configured in `eas.json`.
+
+Useful commands:
+
+```bash
+npm run typecheck
+npm run export:web
+npm run build:ios:testflight
+npm run submit:ios:testflight
+```
+
+The build and submit commands require an Expo/EAS login plus Apple Developer access. See `../../docs/APP_STORE_TESTFLIGHT.md` for the full release runbook.

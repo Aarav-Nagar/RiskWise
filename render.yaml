@@ -22,4 +22,6 @@ services:
       - key: OPENAI_MODEL
         value: gpt-5-mini
       - key: MARKET_DATA_PROVIDER
-        value: disabled
+        value: hybrid
+      - key: ENABLE_YFINANCE_OPTIONS
+        value: true

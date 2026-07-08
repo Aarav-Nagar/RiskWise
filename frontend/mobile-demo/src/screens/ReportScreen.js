@@ -53,7 +53,7 @@ export function ReportScreen({ report, onAskAi, onSave, saveStatus }) {
       <IntelligenceStrip
         agreement={report.agentAgreement}
         agents={Array.isArray(report.agentDocket) ? Math.min(5, report.agentDocket.length || 5) : 5}
-        pattern={report.weakestLink ? `${report.weakestLink} is the pressure point` : "Risk-balanced setup"}
+        pattern={report.weakestLink ? `${report.weakestLink} is unresolved` : "Core rule checks complete"}
         missing={report.dataQuality?.missing?.length ?? marketContext?.fields_pending?.length ?? 2}
       />
 
@@ -64,7 +64,7 @@ export function ReportScreen({ report, onAskAi, onSave, saveStatus }) {
             <Text style={styles.overall}>{report.overallRead}</Text>
             <Text style={sharedText.bodyText}>{report.insight}</Text>
           </View>
-          <ConfidenceRing value={report.setupScore} label="setup" sublabel="quality" />
+          <ConfidenceRing value={report.setupScore} label="rules" sublabel="coverage" />
         </View>
         <View style={styles.heroChart}>
           <MiniLineChart data={buildConfidenceCurve(report)} height={78} />
@@ -116,6 +116,8 @@ function PanelTabs({ activePanel, setActivePanel }) {
 }
 
 function OverviewPanel({ report, labelOpen, setLabelOpen }) {
+  const riskUsed = Number(report.decisionSnapshot.risk_budget_used ?? 0);
+  const profileLimit = Number(report.decisionSnapshot.profile_risk_limit ?? 2);
   return (
     <Card>
       <Pressable style={styles.contractToggle} onPress={() => setLabelOpen((open) => !open)}>
@@ -133,10 +135,10 @@ function OverviewPanel({ report, labelOpen, setLabelOpen }) {
       <View style={styles.panelDivider} />
       <Text style={sharedText.sectionTitle}>Decision Snapshot</Text>
       <View style={styles.snapshotGrid}>
-        <ScoreTile label="Setup" value={report.decisionSnapshot.setup_quality ?? report.setupScore} suffix="/100" />
-        <ScoreTile label="Options" value={report.decisionSnapshot.options_structure ?? 58} suffix="/100" />
-        <ScoreTile label="Risk Used" value={report.decisionSnapshot.risk_budget_used ?? 0} suffix="%" risk={(report.decisionSnapshot.risk_budget_used ?? 0) > 2} />
-        <ScoreTile label="Review Gap" value={report.decisionSnapshot.agent_disagreement || "Med"} />
+        <ScoreTile label="Rule coverage" value={report.decisionSnapshot.setup_quality ?? report.setupScore} suffix="/100" />
+        <ScoreTile label="Evidence" value={report.decisionSnapshot.options_structure ?? 58} suffix="/100" />
+        <ScoreTile label="Risk Used" value={report.decisionSnapshot.risk_budget_used ?? 0} suffix="%" risk={riskUsed > profileLimit} />
+        <ScoreTile label="Unresolved risks" value={report.decisionSnapshot.review_gap || report.decisionSnapshot.agent_disagreement || "Med"} />
       </View>
 
       <View style={styles.panelDivider} />
@@ -172,10 +174,10 @@ function RiskMathPanel({ report }) {
       </View>
 
       <View style={styles.panelDivider} />
-      <Text style={sharedText.sectionTitle}>Agreement Map</Text>
+      <Text style={sharedText.sectionTitle}>Evidence Map</Text>
       <Text style={styles.conflict}>{report.agreementMap.main_conflict}</Text>
-      <MapList title="What lines up" items={report.agreementMap.agree || []} good />
-      <MapList title="Needs caution" items={report.agreementMap.disagree || []} />
+      <MapList title="Rule coverage" items={report.agreementMap.agree || []} good />
+      <MapList title="Unresolved risks" items={report.agreementMap.disagree || []} />
     </Card>
   );
 }
@@ -202,7 +204,7 @@ function DebatePanel({ report }) {
       <ConversationBubble
         speaker="Risk Judge"
         tone="neutral"
-        text={`${debate.risk_judge || "Sizing and contract timing decide whether the idea is manageable."} I would want the user to answer three things before giving this setup any confidence: what invalidates the thesis, how much premium can disappear before the plan is wrong, and whether this same idea still makes sense if the option loses half its value quickly.`}
+        text={`${debate.risk_judge || "Sizing and contract timing decide whether the idea is manageable."} I would want the user to answer three things before treating the review as complete: what invalidates the thesis, how much premium can disappear before the plan is wrong, and whether this same idea still makes sense if the option loses half its value quickly.`}
       />
       <ConversationBubble
         speaker="Coach Takeaway"
@@ -217,7 +219,7 @@ function AgentsPanel({ report }) {
   return (
     <Card>
       <Text style={sharedText.sectionTitle}>Review Panel</Text>
-      <Text style={styles.agentPanelSub}>Each agent scores a different failure mode. The useful part is disagreement, not fake certainty.</Text>
+      <Text style={styles.agentPanelSub}>This is a coverage map for failure modes. Scores are checklist signals, not independent model agreement.</Text>
       <AgentRadar agents={report.agentDocket} />
       {report.agentDocket.map((agent) => (
         <AgentRow key={agent.name} agent={agent} />
@@ -234,8 +236,8 @@ function RiskCurve({ report }) {
     <View style={styles.riskCurve}>
       <View style={styles.curveHeader}>
         <View>
-          <Text style={styles.curveTitle}>Risk pressure curve</Text>
-          <Text style={styles.curveSub}>Sizing, time decay, and breakeven pressure</Text>
+          <Text style={styles.curveTitle}>Evidence completeness curve</Text>
+          <Text style={styles.curveSub}>Hand-built checklist pressure, not option-pricing output</Text>
         </View>
         <Text style={styles.curveBadge}>{risk.toFixed(1)}%</Text>
       </View>

@@ -33,7 +33,7 @@ export function MiniLineChart({ data = [], height = 86, stroke = palette.green, 
   );
 }
 
-export function ConfidenceRing({ value = 72, label = "AI", sublabel = "confidence", size = 92 }) {
+export function ConfidenceRing({ value = 72, label = "rules", sublabel = "coverage", size = 92 }) {
   const radius = 36;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - Math.max(0, Math.min(100, value)) / 100);
@@ -70,8 +70,8 @@ export function IntelligenceStrip({ agreement = 72, agents = 5, pattern = "Risk-
         <View style={styles.pulseCore} />
       </View>
       <View style={styles.stripCopy}>
-        <Text style={styles.stripTitle}>RiskWise is weighing this setup</Text>
-        <Text style={styles.stripSub}>{agents}/5 agents active - {agreement}% consensus - {pattern}</Text>
+        <Text style={styles.stripTitle}>RiskWise is checking rule coverage</Text>
+        <Text style={styles.stripSub}>{agents}/5 review areas checked - {agreement}% evidence coverage - {pattern}</Text>
       </View>
       <View style={styles.missingBadge}>
         <Text style={styles.missingValue}>{missing}</Text>
@@ -98,8 +98,8 @@ export function ScenarioFanChart({ scenarios = [], height = 118 }) {
   return (
     <View style={styles.fanWrap}>
       <View style={styles.fanHeader}>
-        <Text style={styles.fanTitle}>Outcome range</Text>
-        <Text style={styles.fanSub}>Bear/base/bull path from the report</Text>
+        <Text style={styles.fanTitle}>Unresolved risk sketch</Text>
+        <Text style={styles.fanSub}>Rule-of-thumb stress markers, not priced scenarios</Text>
       </View>
       <Svg viewBox={`0 0 280 ${height}`} width="100%" height={height} preserveAspectRatio="none">
         <Defs>

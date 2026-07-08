@@ -1,9 +1,9 @@
 import React from "react";
-import { Image, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Image, Linking, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
 import { Header, money, ScreenScroll, sharedText } from "../components/Shared";
-import { getMarketBundle, searchMarketSymbols } from "../services/apiClient";
+import { getMarketBundle, getMarketProviderStatus, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
 const stockUniverse = [
@@ -57,8 +57,9 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
   const startingStock = findStock(draft.ticker) || stockUniverse[1];
   const [query, setQuery] = React.useState(startingStock.symbol);
   const [selectedStock, setSelectedStock] = React.useState(startingStock);
-  const [marketBundle, setMarketBundle] = React.useState({ quote: null, profile: null, news: null, earnings: null });
+  const [marketBundle, setMarketBundle] = React.useState({ quote: null, profile: null, news: null, earnings: null, optionsContext: null });
   const [marketLoading, setMarketLoading] = React.useState(false);
+  const [providerStatus, setProviderStatus] = React.useState(null);
   const [remoteMatches, setRemoteMatches] = React.useState([]);
   const [savedQuery, setSavedQuery] = React.useState("");
   const [savedFilter, setSavedFilter] = React.useState("All");
@@ -68,6 +69,26 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
   const quote = marketBundle.quote;
   const earnings = marketBundle.earnings?.items || [];
   const filteredSavedChecks = filterSavedChecks(savedChecks, savedQuery, savedFilter);
+
+  React.useEffect(() => {
+    let mounted = true;
+    async function loadProviderStatus() {
+      try {
+        const status = await getMarketProviderStatus();
+        if (mounted) {
+          setProviderStatus(status);
+        }
+      } catch (error) {
+        if (mounted) {
+          setProviderStatus(null);
+        }
+      }
+    }
+    loadProviderStatus();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   React.useEffect(() => {
     let mounted = true;
@@ -83,7 +104,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
         }
       } catch (error) {
         if (mounted) {
-          setMarketBundle({ quote: null, profile: null, news: null, earnings: null });
+          setMarketBundle({ quote: null, profile: null, news: null, earnings: null, optionsContext: null });
         }
       } finally {
         if (mounted) {
@@ -195,6 +216,8 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
       </Card>
 
       <MarketSnapshot stock={selectedStock} quote={quote} earnings={earnings} loading={marketLoading} />
+      <OptionsReadinessCard stock={selectedStock} context={marketBundle.optionsContext} loading={marketLoading} />
+      <DataStatusCard status={providerStatus} />
 
       <Card>
         <View style={styles.sectionHeader}>
@@ -258,7 +281,42 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
   );
 }
 
+function DataStatusCard({ status }) {
+  const providers = Array.isArray(status?.capabilities) ? status.capabilities : [];
+  const active = providers.filter((item) => item.status === "active");
+  const fieldList = status?.data_quality_labels || [];
+  const coreFields = fieldList.length ? fieldList.slice(0, 4) : ["Quote", "News", "Delayed options", "Manual upload"];
+  return (
+    <Card style={styles.dataStatusCard}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.eyebrow}>Data transparency</Text>
+          <Text style={styles.dataStatusTitle}>{active.length ? `${active.length} source${active.length === 1 ? "" : "s"} ready` : "Backend status pending"}</Text>
+        </View>
+        <View style={[styles.dataStatusPill, !active.length && styles.dataStatusPillMuted]}>
+          <Text style={[styles.dataStatusPillText, !active.length && styles.dataStatusPillTextMuted]}>
+            {active.length ? String(status?.strategy || "active").replace(/_/g, " ") : "offline"}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.dataFieldRow}>
+        {coreFields.map((field) => (
+          <View key={field} style={styles.dataFieldChip}>
+            <Ionicons name="checkmark-circle-outline" size={13} color={palette.green} />
+            <Text style={styles.dataFieldText}>{field}</Text>
+          </View>
+        ))}
+      </View>
+      <Text style={styles.dataStatusCopy}>
+        {status?.message || "RiskWise labels delayed, estimated, manual, and missing fields instead of pretending every option field is live."}
+      </Text>
+    </Card>
+  );
+}
+
 function MarketSnapshot({ stock, quote, earnings, loading }) {
+  const { width } = useWindowDimensions();
+  const compactGrid = width < 360;
   const nextEarnings = earnings[0];
   const change = Number(quote?.changePercentage || 0);
   const changeText = quote?.price ? `${change >= 0 ? "+" : ""}${change.toFixed(2)}%` : "Pending";
@@ -274,18 +332,54 @@ function MarketSnapshot({ stock, quote, earnings, loading }) {
         </View>
       </View>
       <View style={styles.snapshotGrid}>
-        <MiniDatum label="Day range" value={quote?.dayLow && quote?.dayHigh ? `$${Number(quote.dayLow).toFixed(2)} - $${Number(quote.dayHigh).toFixed(2)}` : "Not available"} />
-        <MiniDatum label="Volume" value={quote?.volume ? shortNumber(quote.volume) : "Not available"} />
-        <MiniDatum label="Market cap" value={quote?.marketCap ? shortMoney(quote.marketCap) : "Not available"} />
-        <MiniDatum label="Earnings" value={nextEarnings?.date || "No date found"} />
+        <MiniDatum compact={compactGrid} label="Day range" value={quote?.dayLow && quote?.dayHigh ? `$${Number(quote.dayLow).toFixed(2)} - $${Number(quote.dayHigh).toFixed(2)}` : "Not available"} />
+        <MiniDatum compact={compactGrid} label="Volume" value={quote?.volume ? shortNumber(quote.volume) : "Not available"} />
+        <MiniDatum compact={compactGrid} label="Market cap" value={quote?.marketCap ? shortMoney(quote.marketCap) : "Not available"} />
+        <MiniDatum compact={compactGrid} label="Earnings" value={nextEarnings?.date || "No date found"} />
       </View>
     </Card>
   );
 }
 
-function MiniDatum({ label, value }) {
+function OptionsReadinessCard({ stock, context, loading }) {
+  const pending = Array.isArray(context?.fields_pending) ? context.fields_pending : [];
+  const ready = context?.status && !["needs_provider_key", "requires_options_provider"].includes(context.status);
+  const title = loading
+    ? "Checking option data..."
+    : ready
+      ? `${stock?.symbol || "Ticker"} options context attached`
+      : `${stock?.symbol || "Ticker"} needs option-chain proof`;
+  const provider = context?.provider || (loading ? "loading" : "not attached");
+  const pendingLabels = pending.length ? pending.slice(0, 5).map(friendlyField) : ["Bid/ask", "IV", "Greeks", "Volume", "Open interest"];
   return (
-    <View style={styles.miniDatum}>
+    <Card style={styles.optionsReadinessCard}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.eyebrow}>Options readiness</Text>
+          <Text style={styles.optionsReadinessTitle}>{title}</Text>
+        </View>
+        <View style={[styles.optionsStatusPill, !ready && styles.optionsStatusPillWarn]}>
+          <Text style={[styles.optionsStatusText, !ready && styles.optionsStatusTextWarn]}>{provider.replace(/_/g, " ")}</Text>
+        </View>
+      </View>
+      <View style={styles.dataFieldRow}>
+        {pendingLabels.map((field) => (
+          <View key={field} style={[styles.dataFieldChip, styles.optionsMissingChip]}>
+            <Ionicons name={ready && !pending.length ? "checkmark-circle-outline" : "ellipse-outline"} size={13} color={ready && !pending.length ? palette.green : "#B45309"} />
+            <Text style={styles.dataFieldText}>{field}</Text>
+          </View>
+        ))}
+      </View>
+      <Text style={styles.dataStatusCopy}>
+        {context?.message || "RiskWise can review structure with manual contract inputs, but it will not invent live premium, IV, Greeks, bid/ask, volume, or open interest."}
+      </Text>
+    </Card>
+  );
+}
+
+function MiniDatum({ label, value, compact }) {
+  return (
+    <View style={[styles.miniDatum, compact && styles.miniDatumCompact]}>
       <Text style={styles.miniDatumLabel}>{label}</Text>
       <Text style={styles.miniDatumValue} numberOfLines={1}>{value}</Text>
     </View>
@@ -458,6 +552,14 @@ function shortMoney(value) {
   return `$${shortNumber(value)}`;
 }
 
+function friendlyField(value) {
+  const clean = String(value || "").replace(/_/g, " ");
+  if (clean.toLowerCase() === "bid ask") return "Bid/ask";
+  if (clean.toLowerCase() === "implied volatility") return "IV";
+  if (clean.toLowerCase() === "provider reported greeks") return "Provider Greeks";
+  return clean.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 const styles = StyleSheet.create({
   selectorCard: {
     backgroundColor: "#FBFFFC"
@@ -586,6 +688,101 @@ const styles = StyleSheet.create({
   snapshotCard: {
     backgroundColor: "#FFFFFF"
   },
+  dataStatusCard: {
+    backgroundColor: "#FBFFFC",
+    borderColor: "#DDF3E3"
+  },
+  optionsReadinessCard: {
+    backgroundColor: "#FFFCF4",
+    borderColor: "#F2DFA8"
+  },
+  optionsReadinessTitle: {
+    color: palette.dark,
+    fontSize: 16,
+    fontWeight: "900",
+    maxWidth: 235
+  },
+  optionsStatusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: palette.greenSoft,
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    maxWidth: 130
+  },
+  optionsStatusPillWarn: {
+    backgroundColor: "#FFF7E6",
+    borderColor: "#F1D39A"
+  },
+  optionsStatusText: {
+    color: palette.green,
+    fontSize: 9,
+    fontWeight: "900",
+    textTransform: "capitalize"
+  },
+  optionsStatusTextWarn: {
+    color: "#B45309"
+  },
+  optionsMissingChip: {
+    backgroundColor: "#FFFFFF"
+  },
+  dataStatusTitle: {
+    color: palette.dark,
+    fontSize: 16,
+    fontWeight: "900"
+  },
+  dataStatusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    backgroundColor: palette.greenSoft,
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    maxWidth: 120
+  },
+  dataStatusPillMuted: {
+    backgroundColor: "#F3F5F3",
+    borderColor: palette.border
+  },
+  dataStatusPillText: {
+    color: palette.green,
+    fontSize: 9,
+    fontWeight: "900",
+    textTransform: "capitalize"
+  },
+  dataStatusPillTextMuted: {
+    color: palette.muted
+  },
+  dataFieldRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 7,
+    marginTop: 10
+  },
+  dataFieldChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#DDF3E3",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5
+  },
+  dataFieldText: {
+    color: palette.dark,
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  dataStatusCopy: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "800",
+    marginTop: 10
+  },
   snapshotHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -630,6 +827,9 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     backgroundColor: "#FBFCFB",
     padding: 10
+  },
+  miniDatumCompact: {
+    width: "100%"
   },
   miniDatumLabel: {
     color: palette.muted,

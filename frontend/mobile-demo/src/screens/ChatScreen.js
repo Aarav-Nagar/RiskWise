@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Image, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
-import { listChatMessages, listChatThreads, sendChatMessage } from "../services/apiClient";
+import * as Sharing from "expo-sharing";
+import { getSavedCheckExport, listChatMessages, listChatThreads, sendChatMessage } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
 const askModes = ["Explain", "Review", "Compare"];
@@ -21,8 +24,16 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
   const [attachments, setAttachments] = useState([]);
   const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
   const [uploadStatus, setUploadStatus] = useState("");
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportPreview, setExportPreview] = useState(null);
+  const [exportStatus, setExportStatus] = useState("");
   const scrollRef = useRef(null);
   const tradeOptions = useMemo(() => buildTradeOptions(currentReport, savedChecks), [currentReport, savedChecks]);
+  const selectedSavedCheck = useMemo(
+    () => findSelectedSavedCheck(selectedTrade, savedChecks),
+    [selectedTrade, savedChecks]
+  );
 
   useEffect(() => {
     if (currentReport && !selectedTrade) {
@@ -34,11 +45,12 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd?.({ animated: true }));
   }, [messages.length, loading]);
 
-  async function submit(text = input) {
+  async function submit(text = input, options = {}) {
     const clean = text.trim();
     if ((!clean && attachments.length === 0) || loading) {
       return;
     }
+    const analysisDepth = options.analysisDepth || "standard";
     const outgoingAttachments = attachments;
     const messageText = clean || "Review these attachments.";
     setInput("");
@@ -54,6 +66,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
         message: messageText,
         currentReport: selectedTrade,
         chatMode,
+        analysisDepth,
         attachments: outgoingAttachments
       });
       setThreadId(response.thread_id);
@@ -66,12 +79,19 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
           role: "assistant",
           content: response.answer,
           mode: response.mode,
+          analysisDepth: response.analysis_depth,
           confidence: response.confidence,
           missingData: response.missing_data || [],
           riskFlags: response.risk_flags || [],
           toolsUsed: response.tools_used || [],
+          whatUsed: response.what_used || [],
           summaryCards: response.summary_cards || [],
-          visualBlocks: response.visual_blocks || []
+          visualBlocks: response.visual_blocks || [],
+          agentDocket: response.agent_docket || [],
+          provider: response.provider,
+          usedFallback: response.used_fallback,
+          confidence: response.confidence,
+          suggestedPrompts: response.suggested_prompts || []
         }
       ]);
     } catch (err) {
@@ -141,6 +161,26 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
 
   async function selectUploadSource(source) {
     setAttachmentMenuOpen(false);
+    if (source === "external_ai_export") {
+      await openExternalAiExport();
+      return;
+    }
+    if (source === "deep_analysis") {
+      const prompt = selectedTrade
+        ? `Run deep analysis on ${tradeTitle(selectedTrade)}.`
+        : attachments.length
+          ? "Run deep analysis on these attachments."
+          : "Run deep analysis.";
+      await submit(prompt, { analysisDepth: "deep_analysis" });
+      return;
+    }
+    if (source === "upload" && Platform.OS !== "web") {
+      openNativeUploadChooser();
+      return;
+    }
+    if (source === "upload") {
+      source = "files";
+    }
     if (Platform.OS !== "web" || typeof document === "undefined") {
       await pickNativeAttachment(source);
       return;
@@ -164,6 +204,19 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
       setUploadStatus(parsed.length ? `${parsed.length} ${parsed.length === 1 ? "item" : "items"} added from ${uploadSourceLabel(source)}. Ask RiskWiseAI to review them.` : "");
     };
     inputEl.click();
+  }
+
+  function openNativeUploadChooser() {
+    Alert.alert(
+      "Add upload",
+      "Choose where your screenshot, image, or file comes from.",
+      [
+        { text: "Take Photo", onPress: () => pickNativeAttachment("camera") },
+        { text: "Photo Library", onPress: () => pickNativeAttachment("library") },
+        { text: "Files", onPress: () => pickNativeAttachment("files") },
+        { text: "Cancel", style: "cancel" }
+      ]
+    );
   }
 
   async function pickNativeAttachment(source) {
@@ -211,6 +264,77 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
       setUploadStatus(parsed.length ? `${parsed.length} ${parsed.length === 1 ? "file" : "files"} added from Files.` : "");
     } catch (err) {
       setUploadStatus("Could not attach that file. Try a smaller image or file.");
+    }
+  }
+
+  async function openExternalAiExport() {
+    if (!selectedSavedCheck) {
+      setUploadStatus("Select a saved Check before exporting for AI review.");
+      return;
+    }
+    setExportModalOpen(true);
+    setExportLoading(true);
+    setExportPreview(null);
+    setExportStatus("");
+    try {
+      const result = await getSavedCheckExport(user, selectedSavedCheck.id);
+      setExportPreview(result);
+    } catch (err) {
+      setExportStatus(err?.message || "Could not build this export. Try again.");
+    } finally {
+      setExportLoading(false);
+    }
+  }
+
+  async function copyExternalAiExport() {
+    if (!exportPreview?.markdown) {
+      return;
+    }
+    try {
+      await Clipboard.setStringAsync(exportPreview.markdown);
+      setExportStatus("Copied to clipboard.");
+    } catch (err) {
+      setExportStatus("Could not copy the export. You can select the preview text manually.");
+    }
+  }
+
+  async function downloadExternalAiExport() {
+    if (!exportPreview?.markdown) {
+      return;
+    }
+    try {
+      if (Platform.OS === "web" && typeof document !== "undefined") {
+        const blob = new Blob([exportPreview.markdown], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = exportPreview.filename || "riskwise-check-export.md";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        setExportStatus("Download started.");
+        return;
+      }
+      if (!FileSystem.cacheDirectory) {
+        throw new Error("No writable export directory is available.");
+      }
+      const filename = safeExportFilename(exportPreview.filename);
+      const uri = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.writeAsStringAsync(uri, exportPreview.markdown, {
+        encoding: FileSystem.EncodingType.UTF8
+      });
+      if (!(await Sharing.isAvailableAsync())) {
+        throw new Error("File sharing is not available on this device.");
+      }
+      await Sharing.shareAsync(uri, {
+        dialogTitle: "Save RiskWise export",
+        mimeType: "text/markdown",
+        UTI: "net.daringfireball.markdown"
+      });
+      setExportStatus("Export file is ready.");
+    } catch (err) {
+      setExportStatus(err?.message || "Could not create the export file.");
     }
   }
 
@@ -265,18 +389,24 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
           <View style={[styles.bubble, styles.aiBubble]}>
             <View style={styles.thinkingRow}>
               <View style={styles.dot} />
-              <Text style={styles.bubbleText}>Thinking...</Text>
+            <Text style={styles.bubbleText}>{chatMode === "Review" ? "Reviewing..." : "Thinking..."}</Text>
             </View>
           </View>
         ) : null}
       </ScrollView>
 
       <View style={styles.composerWrap}>
-        {attachmentMenuOpen ? <AttachmentMenu onPick={selectUploadSource} onClose={() => setAttachmentMenuOpen(false)} /> : null}
+        {attachmentMenuOpen ? (
+          <AttachmentMenu
+            onPick={selectUploadSource}
+            onClose={() => setAttachmentMenuOpen(false)}
+            canExport={Boolean(selectedSavedCheck)}
+          />
+        ) : null}
         {attachments.length ? <AttachmentTray attachments={attachments} onRemove={(index) => setAttachments((items) => items.filter((_, i) => i !== index))} /> : null}
         {uploadStatus ? <Text style={styles.uploadStatus}>{uploadStatus}</Text> : null}
         <View style={styles.inputRow}>
-          <Pressable accessibilityLabel="Add attachment" style={[styles.plusButton, attachmentMenuOpen && styles.plusButtonActive]} onPress={openAttachmentMenu}>
+          <Pressable accessibilityLabel="Add context" style={[styles.plusButton, attachmentMenuOpen && styles.plusButtonActive]} onPress={openAttachmentMenu}>
             <Ionicons name="add" size={22} color={palette.green} />
           </Pressable>
           <TextInput
@@ -295,6 +425,15 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
         </View>
         <Text style={styles.disclaimerText}>Educational only. Not financial advice.</Text>
       </View>
+      <ExportReviewModal
+        visible={exportModalOpen}
+        loading={exportLoading}
+        exportData={exportPreview}
+        status={exportStatus}
+        onClose={() => setExportModalOpen(false)}
+        onCopy={copyExternalAiExport}
+        onDownload={downloadExternalAiExport}
+      />
     </View>
   );
 
@@ -304,42 +443,49 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
   }
 }
 
-function AttachmentMenu({ onPick, onClose }) {
+function AttachmentMenu({ onPick, onClose, canExport }) {
   return (
     <View style={styles.attachmentMenu}>
       <View style={styles.attachmentMenuHeader}>
         <Text style={styles.attachmentMenuTitle}>Add context</Text>
-        <Pressable accessibilityLabel="Close attachment menu" style={styles.attachmentMenuClose} onPress={onClose}>
+        <Pressable accessibilityLabel="Close sheet" style={styles.attachmentMenuClose} onPress={onClose}>
           <Ionicons name="close" size={15} color={palette.muted} />
         </Pressable>
       </View>
       <View style={styles.attachmentOptions}>
         <AttachmentAction
-          icon="camera-outline"
-          title="Take Photo"
-          subtitle="Capture a contract screenshot"
-          onPress={() => onPick("camera")}
+          icon="cloud-upload-outline"
+          title="Upload"
+          subtitle="Photo, screenshot, PDF, CSV, or text"
+          onPress={() => onPick("upload")}
         />
         <AttachmentAction
-          icon="images-outline"
-          title="Photo Library"
-          subtitle="Choose saved screenshots"
-          onPress={() => onPick("library")}
+          icon="document-text-outline"
+          title="Export for AI Review"
+          subtitle={canExport ? "Preview a saved Check as Markdown" : "Select a saved Check first"}
+          disabled={!canExport}
+          onPress={() => onPick("external_ai_export")}
         />
         <AttachmentAction
-          icon="folder-open-outline"
-          title="Files"
-          subtitle="PDF, CSV, text, or image"
-          onPress={() => onPick("files")}
+          icon="sparkles-outline"
+          title="Deep Analysis"
+          subtitle="Run the 5-agent committee"
+          onPress={() => onPick("deep_analysis")}
         />
       </View>
     </View>
   );
 }
 
-function AttachmentAction({ icon, title, subtitle, onPress }) {
+function AttachmentAction({ icon, title, subtitle, onPress, disabled = false }) {
   return (
-    <Pressable accessibilityLabel={title} style={styles.attachmentAction} onPress={onPress}>
+    <Pressable
+      accessibilityLabel={title}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      style={[styles.attachmentAction, disabled && styles.attachmentActionDisabled]}
+      onPress={onPress}
+    >
       <View style={styles.attachmentActionIcon}>
         <Ionicons name={icon} size={19} color={palette.green} />
       </View>
@@ -352,9 +498,70 @@ function AttachmentAction({ icon, title, subtitle, onPress }) {
   );
 }
 
+function ExportReviewModal({ visible, loading, exportData, status, onClose, onCopy, onDownload }) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      <Pressable style={styles.exportBackdrop} onPress={onClose}>
+        <Pressable style={styles.exportSheet} onPress={(event) => event.stopPropagation()}>
+          <View style={styles.exportHeader}>
+            <View style={styles.exportTitleWrap}>
+              <Text style={styles.exportEyebrow}>EXTERNAL AI REVIEW</Text>
+              <Text style={styles.exportTitle}>Export saved Check</Text>
+            </View>
+            <Pressable accessibilityLabel="Close export preview" style={styles.exportClose} onPress={onClose}>
+              <Ionicons name="close" size={18} color={palette.dark} />
+            </Pressable>
+          </View>
+
+          {loading ? (
+            <View style={styles.exportLoading}>
+              <ActivityIndicator color={palette.green} />
+              <Text style={styles.exportLoadingText}>Building your export...</Text>
+            </View>
+          ) : exportData?.markdown ? (
+            <>
+              <ScrollView style={styles.exportPreview} contentContainerStyle={styles.exportPreviewContent}>
+                <Text selectable style={styles.exportMarkdown}>{exportData.markdown}</Text>
+              </ScrollView>
+              <Text style={styles.exportGuidance}>
+                Paste this into Claude, ChatGPT, or any AI assistant. When you have a response, come back and paste it here in Coach as a follow-up message.
+              </Text>
+              <View style={styles.exportActions}>
+                <Pressable accessibilityLabel="Copy export to clipboard" style={styles.exportSecondaryButton} onPress={onCopy}>
+                  <Ionicons name="copy-outline" size={17} color={palette.green} />
+                  <Text style={styles.exportSecondaryText}>Copy to clipboard</Text>
+                </Pressable>
+                <Pressable accessibilityLabel="Download export as a file" style={styles.exportPrimaryButton} onPress={onDownload}>
+                  <Ionicons name="download-outline" size={17} color="#FFFFFF" />
+                  <Text style={styles.exportPrimaryText}>Download as file</Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <View style={styles.exportLoading}>
+              <Ionicons name="alert-circle-outline" size={24} color={palette.red} />
+              <Text selectable style={styles.exportError}>{status || "Could not build this export."}</Text>
+            </View>
+          )}
+          {status && exportData?.markdown ? <Text selectable style={styles.exportStatus}>{status}</Text> : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 function MessageBubble({ message }) {
   const isUser = message.role === "user";
-  const hasMeta = !isUser && (message.missingData?.length || message.riskFlags?.length || message.summaryCards?.length || message.toolsUsed?.length || message.visualBlocks?.length);
+  const hasMeta = !isUser && (
+    message.missingData?.length ||
+    message.riskFlags?.length ||
+    message.summaryCards?.length ||
+    message.toolsUsed?.length ||
+    message.whatUsed?.length ||
+    message.visualBlocks?.length ||
+    message.suggestedPrompts?.length ||
+    typeof message.confidence === "number"
+  );
   return (
     <View style={[styles.bubble, isUser ? styles.userBubble : styles.aiBubble]}>
       <Text style={[styles.bubbleText, isUser && styles.userBubbleText]}>{message.content}</Text>
@@ -374,11 +581,29 @@ function MessageBubble({ message }) {
 }
 
 function AssistantMetadata({ message }) {
+  const sourceLabels = message.whatUsed?.length ? message.whatUsed : (message.toolsUsed || []).map((tool) => tool.name?.replace(/_/g, " "));
+  const confidence = typeof message.confidence === "number" ? Math.round(message.confidence * 100) : null;
   return (
     <View style={styles.metaWrap}>
+      <View style={styles.metaSourceRow}>
+        {confidence !== null ? (
+          <View style={styles.sourceChip}>
+            <Ionicons name="speedometer-outline" size={12} color={palette.green} />
+            <Text style={styles.sourceChipText}>{confidence}% confidence</Text>
+          </View>
+        ) : null}
+        {message.provider ? (
+          <View style={[styles.sourceChip, message.usedFallback && styles.sourceChipWarn]}>
+            <Ionicons name={message.usedFallback ? "shield-checkmark-outline" : "sparkles-outline"} size={12} color={message.usedFallback ? "#B45309" : palette.green} />
+            <Text style={[styles.sourceChipText, message.usedFallback && styles.sourceChipTextWarn]}>
+              {message.usedFallback ? "Guarded fallback" : message.provider}
+            </Text>
+          </View>
+        ) : null}
+      </View>
       {message.summaryCards?.length ? (
         <View style={styles.metaCards}>
-          {message.summaryCards.slice(0, 4).map((card, index) => (
+          {message.summaryCards.slice(0, 5).map((card, index) => (
             <View key={`${card.label}-${index}`} style={styles.metaCard}>
               <Text style={styles.metaLabel}>{card.label}</Text>
               <Text style={[styles.metaValue, card.tone === "risk" && styles.metaRisk, card.tone === "warn" && styles.metaWarn]} numberOfLines={1}>
@@ -394,13 +619,28 @@ function AssistantMetadata({ message }) {
           <Text style={styles.metaText}>Missing: {message.missingData.slice(0, 3).join(", ")}</Text>
         </View>
       ) : null}
-      {message.toolsUsed?.length ? (
+      {message.riskFlags?.length ? (
+        <View style={styles.metaLine}>
+          <Ionicons name="warning-outline" size={13} color="#B45309" />
+          <Text style={styles.metaText}>Watch: {message.riskFlags.slice(0, 2).join("; ")}</Text>
+        </View>
+      ) : null}
+      {sourceLabels?.length ? (
         <View style={styles.metaLine}>
           <Ionicons name="construct-outline" size={13} color={palette.green} />
-          <Text style={styles.metaText}>Checked: {message.toolsUsed.map((tool) => tool.name.replace("get_", "")).slice(0, 3).join(", ")}</Text>
+          <Text style={styles.metaText}>Used: {sourceLabels.slice(0, 4).join(", ")}</Text>
         </View>
       ) : null}
       {message.visualBlocks?.length ? <AssistantVisualBlocks blocks={message.visualBlocks} /> : null}
+      {message.suggestedPrompts?.length ? (
+        <View style={styles.promptRail}>
+          {message.suggestedPrompts.slice(0, 3).map((prompt) => (
+            <View key={prompt} style={styles.promptChip}>
+              <Text style={styles.promptChipText}>{prompt}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -408,7 +648,7 @@ function AssistantMetadata({ message }) {
 function AssistantVisualBlocks({ blocks }) {
   return (
     <View style={styles.visualBlocks}>
-      {blocks.slice(0, 3).map((block, index) => {
+      {blocks.slice(0, 6).map((block, index) => {
         if (block.type === "score_bar") {
           const value = Math.max(0, Math.min(100, Number(block.value || 0)));
           return (
@@ -427,10 +667,28 @@ function AssistantVisualBlocks({ blocks }) {
           return (
             <View key={`${block.title}-${index}`} style={styles.visualBlock}>
               <Text style={styles.visualTitle}>{block.title}</Text>
-              {(block.rows || []).slice(0, 4).map((row) => (
+              {(block.rows || []).slice(0, 5).map((row) => (
                 <View key={`${row[0]}-${row[1]}`} style={styles.visualRow}>
                   <Text style={styles.visualKey}>{row[0]}</Text>
                   <Text style={styles.visualCell}>{row[1]}</Text>
+                </View>
+              ))}
+            </View>
+          );
+        }
+        if (block.type === "agent_committee") {
+          return (
+            <View key={`${block.title}-${index}`} style={styles.visualBlock}>
+              <Text style={styles.visualTitle}>{block.title}</Text>
+              {(block.agents || []).slice(0, 5).map((agent) => (
+                <View key={agent.agent} style={styles.agentRow}>
+                  <View style={styles.agentScore}>
+                    <Text style={styles.agentScoreText}>{agent.score}</Text>
+                  </View>
+                  <View style={styles.agentCopy}>
+                    <Text style={styles.agentName}>{agent.agent}</Text>
+                    <Text style={styles.agentFinding} numberOfLines={2}>{agent.finding}</Text>
+                  </View>
                 </View>
               ))}
             </View>
@@ -577,6 +835,18 @@ function buildTradeOptions(currentReport, savedChecks) {
     }
   });
   return options.slice(0, 5);
+}
+
+function findSelectedSavedCheck(selectedTrade, savedChecks) {
+  if (!selectedTrade) {
+    return null;
+  }
+  return savedChecks.find((item) => item?.id && (item.report === selectedTrade || item.report?.id === selectedTrade.id)) || null;
+}
+
+function safeExportFilename(filename) {
+  const clean = String(filename || "riskwise-check-export.md").replace(/[^a-zA-Z0-9._-]/g, "-");
+  return clean.endsWith(".md") ? clean : `${clean}.md`;
 }
 
 function tradeTitle(report) {
@@ -827,6 +1097,34 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "#EEF4EF"
   },
+  metaSourceRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6
+  },
+  sourceChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#D7EEDF",
+    backgroundColor: "#F4FFF7",
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4
+  },
+  sourceChipWarn: {
+    borderColor: "#F3DCA8",
+    backgroundColor: "#FFFBEB"
+  },
+  sourceChipText: {
+    color: palette.green,
+    fontSize: 9,
+    fontWeight: "900"
+  },
+  sourceChipTextWarn: {
+    color: "#B45309"
+  },
   visualBlocks: {
     gap: 8,
     marginTop: 3
@@ -885,6 +1183,43 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textAlign: "right"
   },
+  agentRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: "#EAF2EA",
+    paddingTop: 8,
+    marginTop: 8
+  },
+  agentScore: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "#EAF8EE",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  agentScoreText: {
+    color: palette.green,
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  agentCopy: {
+    flex: 1
+  },
+  agentName: {
+    color: palette.dark,
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  agentFinding: {
+    color: palette.muted,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "800",
+    marginTop: 2
+  },
   metaCards: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -928,6 +1263,25 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
     fontWeight: "800"
+  },
+  promptRail: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 2
+  },
+  promptChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#E4EEE5",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 8,
+    paddingVertical: 5
+  },
+  promptChipText: {
+    color: palette.dark,
+    fontSize: 9,
+    fontWeight: "900"
   },
   thinkingRow: {
     flexDirection: "row",
@@ -992,6 +1346,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10
+  },
+  attachmentActionDisabled: {
+    opacity: 0.48
   },
   attachmentActionIcon: {
     width: 38,
@@ -1060,6 +1417,141 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginBottom: 6,
     paddingLeft: 7
+  },
+  exportBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(17, 24, 39, 0.48)"
+  },
+  exportSheet: {
+    maxHeight: "90%",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderColor: "#DCEBDD",
+    backgroundColor: "#FFFFFF",
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 24,
+    gap: 13
+  },
+  exportHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12
+  },
+  exportTitleWrap: {
+    flex: 1,
+    gap: 3
+  },
+  exportEyebrow: {
+    color: palette.green,
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 1.1
+  },
+  exportTitle: {
+    color: palette.dark,
+    fontSize: 20,
+    fontWeight: "900"
+  },
+  exportClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#F2F6F2",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  exportLoading: {
+    minHeight: 260,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10
+  },
+  exportLoadingText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: "800"
+  },
+  exportPreview: {
+    minHeight: 240,
+    maxHeight: 430,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: "#DCEBDD",
+    backgroundColor: "#F7FAF7"
+  },
+  exportPreviewContent: {
+    padding: 14
+  },
+  exportMarkdown: {
+    color: "#26322A",
+    fontSize: 11,
+    lineHeight: 17,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", web: "monospace" })
+  },
+  exportGuidance: {
+    color: palette.muted,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "700"
+  },
+  exportActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 9
+  },
+  exportSecondaryButton: {
+    minHeight: 44,
+    flexGrow: 1,
+    flexBasis: 150,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "#BFE5C8",
+    backgroundColor: "#F6FFF8",
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8
+  },
+  exportSecondaryText: {
+    color: palette.green,
+    fontSize: 12,
+    fontWeight: "900"
+  },
+  exportPrimaryButton: {
+    minHeight: 44,
+    flexGrow: 1,
+    flexBasis: 150,
+    borderRadius: 15,
+    backgroundColor: palette.green,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8
+  },
+  exportPrimaryText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "900"
+  },
+  exportError: {
+    maxWidth: 280,
+    color: palette.red,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+    textAlign: "center"
+  },
+  exportStatus: {
+    color: palette.green,
+    fontSize: 10,
+    fontWeight: "900",
+    textAlign: "center"
   },
   inputRow: {
     flexDirection: "row",

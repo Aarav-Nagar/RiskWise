@@ -189,10 +189,10 @@ export function StatCard({ label, value, sub, good, risk }) {
   );
 }
 
-export function ErrorCard({ message }) {
+export function ErrorCard({ title = "RiskWise needs attention", message }) {
   return (
     <Card style={styles.errorCard}>
-      <Text style={styles.mediumTitle}>Something went wrong</Text>
+      <Text style={styles.mediumTitle}>{title}</Text>
       <Text style={styles.bodyText}>{message}</Text>
     </Card>
   );

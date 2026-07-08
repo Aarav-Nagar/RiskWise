@@ -407,7 +407,23 @@ async def options_chain(ticker: str, expiration: str | None = None) -> OptionsAv
             ),
         )
     if yfinance_enabled():
-        _ = yfinance_option_chain(symbol, expiration=expiration, limit=140)
+        expirations, contracts = yfinance_option_chain(symbol, expiration=expiration, limit=140)
+        contracts = attach_estimated_greeks(contracts, quote.price)
+        if contracts:
+            return OptionsAvailabilityResponse(
+                ticker=symbol,
+                status="delayed_chain_ready",
+                provider="yfinance_delayed",
+                expirations=expirations[:16] if expirations else standard_monthly_expirations(),
+                contracts=contracts[:140],
+                quote=quote.model_dump(),
+                profile=profile.model_dump(),
+                earnings=[item.model_dump() for item in earnings.items],
+                message=(
+                    "RiskWise is using delayed yfinance options data for premium, bid/ask, IV, volume, and open interest where available. "
+                    "Greeks are RiskWise-estimated from Black-Scholes when inputs are sufficient, not provider-reported."
+                ),
+            )
     return OptionsAvailabilityResponse(
         ticker=symbol,
         status="requires_options_provider",

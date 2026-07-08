@@ -5,7 +5,7 @@ import secrets
 from datetime import datetime, timezone
 from typing import Any
 
-from api.settings import settings
+from ..settings import settings
 
 
 def utc_now() -> str:
@@ -61,6 +61,7 @@ class DemoStore:
         self.chat_threads: dict[str, dict[str, Any]] = {}
         self.chat_messages: dict[str, list[dict[str, Any]]] = {}
         self.chat_feedback: list[dict[str, Any]] = []
+        self.uploads_by_user: dict[str, list[dict[str, Any]]] = {}
 
     def create_user(self, payload: Any) -> dict[str, Any]:
         email = clean_email(payload.email)
@@ -112,6 +113,7 @@ class DemoStore:
         if email:
             self.users_by_email.pop(email, None)
         self.saved_checks_by_user.pop(user_id, None)
+        self.uploads_by_user.pop(user_id, None)
         self.trade_checks = {key: value for key, value in self.trade_checks.items() if value.get("userId") != user_id}
         owned_threads = [thread_id for thread_id, row in self.chat_threads.items() if row.get("userId") == user_id]
         for thread_id in owned_threads:
@@ -124,6 +126,7 @@ class DemoStore:
         if user_id not in self.users:
             raise ValueError("User profile was not found.")
         self.saved_checks_by_user.pop(user_id, None)
+        self.uploads_by_user.pop(user_id, None)
         self.trade_checks = {key: value for key, value in self.trade_checks.items() if value.get("userId") != user_id}
         owned_threads = [thread_id for thread_id, row in self.chat_threads.items() if row.get("userId") == user_id]
         for thread_id in owned_threads:
@@ -141,6 +144,7 @@ class DemoStore:
 
     def context_summary(self, user_id: str) -> dict[str, Any]:
         saved_checks = self.saved_checks_by_user.get(user_id, [])
+        saved_uploads = self.uploads_by_user.get(user_id, [])
         threads = [row for row in self.chat_threads.values() if row.get("userId") == user_id]
         uploaded = 0
         for rows in self.chat_messages.values():
@@ -157,7 +161,7 @@ class DemoStore:
             "savedChecks": len(saved_checks),
             "chatThreads": len(threads),
             "chatMessages": sum(int(row.get("messageCount") or 0) for row in threads),
-            "uploadedScreenshots": uploaded,
+            "uploadedScreenshots": uploaded + len(saved_uploads),
             "watchlist": len(tickers),
         }
 
@@ -202,6 +206,24 @@ class DemoStore:
 
     def list_saved_checks(self, user_id: str) -> list[dict[str, Any]]:
         return self.saved_checks_by_user.get(user_id, [])
+
+    def get_saved_check(self, user_id: str, saved_check_id: str) -> dict[str, Any] | None:
+        return next(
+            (item for item in self.saved_checks_by_user.get(user_id, []) if item.get("id") == saved_check_id),
+            None,
+        )
+
+    def save_upload(self, user_id: str, source: str, attachments: list[dict[str, Any]], result: dict[str, Any] | None = None) -> dict[str, Any]:
+        item = {
+            "id": make_id("upload"),
+            "userId": user_id,
+            "source": source,
+            "attachments": compact_upload_attachments(attachments),
+            "result": compact_upload_result(result or {}),
+            "createdAt": utc_now(),
+        }
+        self.uploads_by_user.setdefault(user_id, []).insert(0, item)
+        return item
 
     def append_chat(
         self,
@@ -310,6 +332,10 @@ class MongoStore(DemoStore):
         self.db.trade_checks.create_index([("userId", 1), ("createdAt", -1)])
         self.db.trade_checks.create_index("id", unique=True)
         self.db.chat_feedback.create_index([("userId", 1), ("createdAt", -1)])
+        self.db.uploads.create_index([("userId", 1), ("createdAt", -1)])
+        self.db.user_context.create_index([("userId", 1), ("updatedAt", -1)])
+        self.db.deletion_records.create_index("id", unique=True)
+        self.db.deletion_records.create_index([("userId", 1), ("deletedAt", -1)])
 
     def create_user(self, payload: Any) -> dict[str, Any]:
         email = clean_email(payload.email)
@@ -373,7 +399,18 @@ class MongoStore(DemoStore):
         self.db.chat_feedback.delete_many({"userId": user_id})
         self.db.uploads.delete_many({"userId": user_id})
         self.db.user_context.delete_many({"userId": user_id})
-        return {"deleted": True, "userId": user_id, "deletedAt": utc_now()}
+        deleted_at = utc_now()
+        self.db.deletion_records.insert_one(
+            {
+                "id": make_id("deletion"),
+                "userId": user_id,
+                "email": record.get("email"),
+                "clerkId": record.get("clerkId"),
+                "status": "mongo_cleanup_complete",
+                "deletedAt": deleted_at,
+            }
+        )
+        return {"deleted": True, "userId": user_id, "deletedAt": deleted_at}
 
     def clear_user_context(self, user_id: str) -> dict[str, Any]:
         from pymongo import ReturnDocument
@@ -412,6 +449,7 @@ class MongoStore(DemoStore):
         chat_threads = self.db.chat_threads.count_documents({"userId": user_id})
         chat_messages = self.db.chat_messages.count_documents({"userId": user_id})
         uploaded = self.db.chat_messages.count_documents({"userId": user_id, "attachments.0": {"$exists": True}})
+        saved_uploads = self.db.uploads.count_documents({"userId": user_id})
         tickers = set()
         for row in self.db.saved_checks.find({"userId": user_id}, {"report.ticker": 1}):
             ticker = str(((row.get("report") or {}).get("ticker") or "")).upper()
@@ -421,7 +459,7 @@ class MongoStore(DemoStore):
             "savedChecks": saved_checks,
             "chatThreads": chat_threads,
             "chatMessages": chat_messages,
-            "uploadedScreenshots": uploaded,
+            "uploadedScreenshots": uploaded + saved_uploads,
             "watchlist": len(tickers),
         }
 
@@ -463,6 +501,22 @@ class MongoStore(DemoStore):
     def list_saved_checks(self, user_id: str) -> list[dict[str, Any]]:
         rows = self.db.saved_checks.find({"userId": user_id}).sort("createdAt", -1).limit(10)
         return [public_document(row) for row in rows]
+
+    def get_saved_check(self, user_id: str, saved_check_id: str) -> dict[str, Any] | None:
+        row = self.db.saved_checks.find_one({"id": saved_check_id, "userId": user_id})
+        return public_document(row) if row else None
+
+    def save_upload(self, user_id: str, source: str, attachments: list[dict[str, Any]], result: dict[str, Any] | None = None) -> dict[str, Any]:
+        item = {
+            "id": make_id("upload"),
+            "userId": user_id,
+            "source": source,
+            "attachments": compact_upload_attachments(attachments),
+            "result": compact_upload_result(result or {}),
+            "createdAt": utc_now(),
+        }
+        self.db.uploads.insert_one(item)
+        return public_document(item)
 
     def append_chat(
         self,
@@ -555,6 +609,35 @@ def public_user(record: dict[str, Any]) -> dict[str, Any]:
 
 def public_document(record: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in record.items() if key != "_id"}
+
+
+def compact_upload_attachments(attachments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for item in (attachments or [])[:4]:
+        compact.append(
+            {
+                "name": str(item.get("name") or "attachment")[:120],
+                "type": str(item.get("type") or "")[:80],
+                "source": str(item.get("source") or "file")[:40],
+                "size": int(item.get("size") or 0),
+                "hasText": bool(item.get("text")),
+                "hasImage": bool(item.get("dataUrl") or item.get("data_url") or item.get("uri")),
+            }
+        )
+    return compact
+
+
+def compact_upload_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": result.get("status") or "unknown",
+        "provider": result.get("provider") or "none",
+        "model": result.get("model") or "",
+        "confidence": result.get("confidence") or 0,
+        "fields": result.get("fields") or {},
+        "missing_fields": result.get("missing_fields") or [],
+        "missing_live_fields": result.get("missing_live_fields") or [],
+        "message": result.get("message") or "",
+    }
 
 
 def profile_update_fields(updates: dict[str, Any]) -> dict[str, Any]:
