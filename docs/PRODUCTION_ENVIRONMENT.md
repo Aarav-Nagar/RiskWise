@@ -118,6 +118,7 @@ After rotating, run:
 
 ```bash
 python scripts/verify_production_state.py --strict
+python scripts/verify_production_state.py --check-eas-remote --strict
 
 cd backend
 python -m pytest api/tests

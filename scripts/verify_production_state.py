@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -52,6 +54,17 @@ def classify_clerk_key(value: str) -> str:
     if value.startswith("pk_test_") or value.startswith("sk_test_") or "accounts.dev" in value:
         return "development"
     return "unknown"
+
+
+def parse_eas_env_short(output: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for raw_line in output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("Environment:") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        result[key.strip()] = value.strip()
+    return result
 
 
 def add_check(checks: list[dict[str, Any]], name: str, passed: bool, detail: str, required: bool = True) -> None:
@@ -196,10 +209,83 @@ def verify_local_config(strict: bool, checks: list[dict[str, Any]]) -> None:
         )
 
 
+def verify_remote_eas_config(strict: bool, timeout: float, checks: list[dict[str, Any]]) -> None:
+    local_keys = env_file_keys(ROOT / "config" / ".env")
+    command_env = os.environ.copy()
+    if not command_env.get("EXPO_TOKEN") and local_keys.get("EXPO_TOKEN"):
+        command_env["EXPO_TOKEN"] = local_keys["EXPO_TOKEN"]
+
+    if not command_env.get("EXPO_TOKEN"):
+        add_check(
+            checks,
+            "remote_eas_env_access",
+            False,
+            "EXPO_TOKEN unavailable; cannot verify remote EAS production environment",
+        )
+        return
+
+    npx_path = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx_path:
+        add_check(checks, "remote_eas_env_access", False, "npx executable unavailable")
+        return
+
+    try:
+        process = subprocess.run(
+            [npx_path, "eas-cli@latest", "env:list", "production", "--format", "short"],
+            cwd=FRONTEND,
+            env=command_env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=max(timeout, 60.0),
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001 - verifier should return structured failure.
+        add_check(checks, "remote_eas_env_access", False, f"failed to run EAS CLI: {exc}")
+        return
+
+    add_check(
+        checks,
+        "remote_eas_env_access",
+        process.returncode == 0,
+        f"returncode={process.returncode}",
+    )
+    if process.returncode != 0:
+        return
+
+    remote_env = parse_eas_env_short(process.stdout)
+    expected_public_values = {
+        "EXPO_PUBLIC_API_BASE_URL": DEFAULT_API_BASE_URL,
+        "EXPO_PUBLIC_APP_ENV": "production",
+        "RISKWISE_REQUIRE_PRODUCTION_CLERK": "true",
+    }
+    for name, expected_value in expected_public_values.items():
+        add_check(
+            checks,
+            f"remote_eas_{name.lower()}",
+            remote_env.get(name) == expected_value,
+            f"present={name in remote_env}",
+        )
+
+    remote_clerk_kind = classify_clerk_key(remote_env.get("EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY", ""))
+    add_check(
+        checks,
+        "remote_eas_clerk_publishable_is_production",
+        remote_clerk_kind == "production",
+        f"kind={remote_clerk_kind}",
+        required=strict,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify RiskWise deployed production state without printing secrets.")
     parser.add_argument("--api-base-url", default=os.getenv("RISKWISE_API_BASE_URL", DEFAULT_API_BASE_URL))
     parser.add_argument("--timeout", type=float, default=30.0)
+    parser.add_argument(
+        "--check-eas-remote",
+        action="store_true",
+        help="Also verify the remote EAS production environment using EXPO_TOKEN when available.",
+    )
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -210,6 +296,8 @@ def main() -> int:
     checks: list[dict[str, Any]] = []
     verify_live_api(args.api_base_url, args.timeout, args.strict, checks)
     verify_local_config(args.strict, checks)
+    if args.check_eas_remote:
+        verify_remote_eas_config(args.strict, args.timeout, checks)
 
     failed_required = [check for check in checks if check["required"] and not check["passed"]]
     payload = {
