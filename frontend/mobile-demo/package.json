@@ -11,6 +11,8 @@
     "qa:smoke": "npm run export:web && playwright test --config=playwright.config.cjs",
     "qa:smoke:headed": "npm run export:web && playwright test --config=playwright.config.cjs --headed",
     "doctor": "npx expo-doctor",
+    "check:production-env": "node ./scripts/validate-production-env.cjs",
+    "eas-build-pre-install": "node ./scripts/validate-production-env.cjs",
     "build:ios:testflight": "npx eas-cli build --platform ios --profile testflight",
     "build:ios:production": "npx eas-cli build --platform ios --profile production",
     "submit:ios:testflight": "npx eas-cli submit --platform ios --profile testflight"

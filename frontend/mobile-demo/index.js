@@ -7,11 +7,13 @@ import App from "./src/App";
 
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const sentryDsn = process.env.EXPO_PUBLIC_SENTRY_DSN;
+const appEnvironment =
+  process.env.EXPO_PUBLIC_APP_ENV || process.env.EAS_BUILD_PROFILE || process.env.NODE_ENV || "development";
 
 if (sentryDsn) {
   Sentry.init({
     dsn: sentryDsn,
-    environment: "development",
+    environment: appEnvironment,
     tracesSampleRate: 0.1
   });
 }

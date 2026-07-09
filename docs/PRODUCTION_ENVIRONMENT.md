@@ -1,6 +1,6 @@
 # Production Environment
 
-Last updated: July 7, 2026
+Last updated: July 9, 2026
 
 This file tracks production and TestFlight environment decisions without storing secrets. Secret values must stay in vendor dashboards, EAS environment variables, or the ignored local file `config/.env`.
 
@@ -15,7 +15,7 @@ This file tracks production and TestFlight environment decisions without storing
 
 ## Current Hosted Caveat
 
-The live Render service is healthy and Mongo-connected, but it may still report `MARKET_DATA_PROVIDER=disabled` until Render redeploys from this branch or the Render dashboard is updated with the same `MARKET_DATA_PROVIDER=hybrid` and `ENABLE_YFINANCE_OPTIONS=true` values.
+The live Render service is deployed from the current backend contract: `/market/providers` and `/ai/providers` return 200, Mongo is connected, and the market provider stack is active. `/ready` can still report `degraded` until hosted AI, Sentry, and production Clerk hardening values are configured.
 
 ## Render Environment Variables
 
@@ -71,6 +71,24 @@ EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
 ```
 
 The Clerk publishable key is client-visible. The Clerk secret key must never be placed in the Expo app.
+
+## EAS Production Environment
+
+The `production` profile points to:
+
+```text
+EXPO_PUBLIC_API_BASE_URL=https://riskwise-api.onrender.com
+EXPO_PUBLIC_APP_ENV=production
+RISKWISE_REQUIRE_PRODUCTION_CLERK=true
+```
+
+Set this value in the EAS `production` environment before an App Store build:
+
+```text
+EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
+```
+
+The production EAS build runs `scripts/validate-production-env.cjs` and fails fast if the Clerk publishable key is missing or still uses `pk_test_`.
 
 ## Clerk Production Switch
 
