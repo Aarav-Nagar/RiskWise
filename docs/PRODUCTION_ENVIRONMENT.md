@@ -115,6 +115,8 @@ Rotate these before serious beta because current values were shared during setup
 After rotating, run:
 
 ```bash
+python scripts/verify_production_state.py --strict
+
 cd backend
 python -m pytest api/tests
 python api/scripts/production_persistence_smoke.py
