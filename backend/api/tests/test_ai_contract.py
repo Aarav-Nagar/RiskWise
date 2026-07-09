@@ -645,6 +645,52 @@ def test_contract_parser_handles_broker_shorthand_contract_text() -> None:
     assert fields["contractVolume"] == "456"
 
 
+def test_contract_parser_handles_dollar_strike_month_date_and_signed_quantity() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "broker-copy.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL $200 Call Aug 21 2026 @ $2.15 Qty +3 Bid 2.10 Ask 2.25 OI 1234 Vol 456",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "3"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert fields["openInterest"] == "1234"
+    assert fields["contractVolume"] == "456"
+
+
+def test_contract_parser_normalizes_labeled_month_expiration_for_check_form() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "contract.csv",
+                    "type": "text/csv",
+                    "source": "files",
+                    "text": "Ticker: MSFT\nType: Put\nStrike: 430\nExpiration: August 21, 2026\nPremium: 5.20\nContracts: 2",
+                }
+            ]
+        )
+    )
+
+    assert response["status"] == "ok"
+    assert response["fields"]["expiration"] == "2026-08-21"
+
+
 def test_contract_parser_handles_occ_symbol_and_partial_ocr() -> None:
     response = asyncio.run(
         extract_contract_from_uploads(

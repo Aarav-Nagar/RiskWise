@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from .ai_tools import build_ai_tool_context
@@ -10,6 +10,9 @@ from .llm_provider import configured_providers, generate_answer
 
 
 SAFETY_LINE = "Educational only. Not financial advice."
+ATTACHMENT_NUMBER_RE = r"[+-]?[0-9]+(?:\.[0-9]+)?"
+ATTACHMENT_MONTH_RE = r"(?:JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|SEP(?:TEMBER)?|SEPT|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?)\.?"
+ATTACHMENT_DATE_RE = rf"(?:\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?|{ATTACHMENT_MONTH_RE}\s+\d{{1,2}},?\s*(?:\d{{2,4}})?)"
 
 SYSTEM_PROMPT = """
 You are RiskWiseAI, a calm options-risk coach for students and self-directed learners.
@@ -2173,9 +2176,9 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
     underlying_price = parse_attachment_number(text, ["underlying price", "stock price", "underlying"])
     contracts = parse_attachment_number(text, ["contracts", "quantity", "qty"])
     expiration = None
-    exp_match = re.search(r"(?:EXPIRATION|EXP|EXPIRES?)\D{0,12}([A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}/\d{2,4}|\d{4}-\d{2}-\d{2})", text, re.IGNORECASE)
+    exp_match = re.search(rf"(?:EXPIRATION|EXP|EXPIRES?)\D{{0,12}}({ATTACHMENT_DATE_RE}|\d{{4}}-\d{{2}}-\d{{2}})", text, re.IGNORECASE)
     if exp_match:
-        expiration = exp_match.group(1)
+        expiration = normalize_shorthand_expiration(exp_match.group(1))
     return {
         "ticker": ticker_match.group(1) if ticker_match else None,
         "side": side,
@@ -2211,9 +2214,9 @@ def parse_contract_shorthand(text: str) -> dict[str, Any]:
             "expiration": normalize_shorthand_expiration(f"20{compact.group(2)}-{compact.group(3)}-{compact.group(4)}"),
         }
     patterns = [
-        r"\b([A-Z]{1,5})\s+(\d{1,4}(?:\.\d{1,2})?)\s*([CP])\s+(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b",
-        r"\b([A-Z]{1,5})\s+(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\s+(\d{1,4}(?:\.\d{1,2})?)\s*(CALL|PUT|[CP])\b",
-        r"\b([A-Z]{1,5})\s+(\d{1,4}(?:\.\d{1,2})?)\s+(CALL|PUT)\s+(\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?)\b",
+        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b",
+        rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b",
+        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s+(CALL|PUT)\s+({ATTACHMENT_DATE_RE})\b",
     ]
     for pattern in patterns:
         match = re.search(pattern, text.upper())
@@ -2247,7 +2250,7 @@ def parse_contract_shorthand(text: str) -> dict[str, Any]:
 
 
 def parse_shorthand_premium(text: str) -> float | None:
-    match = re.search(r"(?:@|MARK|MID|DEBIT|PREM(?:IUM)?)\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
+    match = re.search(rf"(?:@|MARK|MID|DEBIT|PREM(?:IUM)?)\s*\$?\s*({ATTACHMENT_NUMBER_RE})", text, re.IGNORECASE)
     return attachment_number_from_value(match.group(1)) if match else None
 
 
@@ -2263,17 +2266,65 @@ def normalize_shorthand_expiration(value: str) -> str:
     if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", text):
         return text
     match = re.match(r"(\d{1,2})[/-](\d{1,2})(?:[/-](\d{2,4}))?$", text)
-    if not match:
+    if match:
+        month = int(match.group(1))
+        day = int(match.group(2))
+        raw_year = match.group(3)
+        year = int(raw_year) if raw_year else date.today().year
+        if year < 100:
+            year += 2000
+        if not raw_year and date(year, month, day) < date.today():
+            year += 1
+        return f"{year:04d}-{month:02d}-{day:02d}"
+
+    month_match = re.match(rf"({ATTACHMENT_MONTH_RE})\s+(\d{{1,2}}),?\s*(\d{{2,4}})?$", text, re.IGNORECASE)
+    if not month_match:
         return text
-    month = int(match.group(1))
-    day = int(match.group(2))
-    raw_year = match.group(3)
+    month = parse_month_number(month_match.group(1))
+    if not month:
+        return text
+    day = int(month_match.group(2))
+    raw_year = month_match.group(3)
     year = int(raw_year) if raw_year else date.today().year
     if year < 100:
         year += 2000
     if not raw_year and date(year, month, day) < date.today():
         year += 1
     return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def parse_month_number(value: str) -> int | None:
+    clean = value.strip().rstrip(".").upper()[:3]
+    months = {
+        "JAN": 1,
+        "FEB": 2,
+        "MAR": 3,
+        "APR": 4,
+        "MAY": 5,
+        "JUN": 6,
+        "JUL": 7,
+        "AUG": 8,
+        "SEP": 9,
+        "OCT": 10,
+        "NOV": 11,
+        "DEC": 12,
+    }
+    return months.get(clean)
+
+
+def normalize_extracted_expiration(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = normalize_shorthand_expiration(text)
+    if normalized != text:
+        return normalized
+    for fmt in ("%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y"):
+        try:
+            return datetime.strptime(text, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return text
 
 
 async def extract_contract_from_uploads(attachments: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2363,7 +2414,7 @@ def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
         "optionSide": option_side or None,
         "tradeType": trade_type or None,
         "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice")),
-        "expiration": str(data.get("expiration") or data.get("expirationDate") or "").strip() or None,
+        "expiration": normalize_extracted_expiration(data.get("expiration") or data.get("expirationDate")),
         "premium": normalize_optional_number(data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost")),
         "bid": normalize_optional_number(data.get("bid")),
         "ask": normalize_optional_number(data.get("ask")),
@@ -2425,11 +2476,11 @@ def extraction_payload(
 
 def parse_attachment_number(text: str, labels: list[str]) -> float | None:
     for label in labels:
-        match = re.search(rf"{re.escape(label)}\s*(?:is|=|:)?\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
+        match = re.search(rf"{re.escape(label)}\s*(?:is|=|:)?\s*\$?\s*({ATTACHMENT_NUMBER_RE})", text, re.IGNORECASE)
         if match:
             return attachment_number_from_value(match.group(1))
     if labels[0] in {"strike", "strk"}:
-        match = re.search(r"\b(?:CALL|PUT)\s+\$?\s*([0-9]+(?:\.[0-9]+)?)", text, re.IGNORECASE)
+        match = re.search(rf"\b(?:CALL|PUT)\s+\$?\s*({ATTACHMENT_NUMBER_RE})", text, re.IGNORECASE)
         if match:
             return attachment_number_from_value(match.group(1))
     return None
