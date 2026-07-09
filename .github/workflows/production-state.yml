@@ -1,0 +1,28 @@
+name: Production State Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: "Fail on public App Store blockers"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+jobs:
+  verify-production-state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify internal beta readiness
+        if: ${{ github.event.inputs.strict != 'true' }}
+        run: python scripts/verify_production_state.py
+      - name: Verify strict production readiness
+        if: ${{ github.event.inputs.strict == 'true' }}
+        run: python scripts/verify_production_state.py --strict

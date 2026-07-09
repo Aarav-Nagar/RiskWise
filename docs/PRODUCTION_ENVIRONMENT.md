@@ -90,6 +90,8 @@ EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
 
 The production EAS build runs `scripts/validate-production-env.cjs` and fails fast if the Clerk publishable key is missing or still uses `pk_test_`.
 
+As of July 9, 2026, the non-secret EAS production variables are also set remotely for `@aaravn/riskwise`: `EXPO_PUBLIC_API_BASE_URL`, `EXPO_PUBLIC_APP_ENV`, and `RISKWISE_REQUIRE_PRODUCTION_CLERK`. The production Clerk publishable key still must be added to EAS after a Clerk production instance exists.
+
 ## Clerk Production Switch
 
 Recommended before inviting external beta testers:

@@ -5,6 +5,7 @@ This checklist is for getting RiskWise to a TestFlight-ready beta. It is intenti
 ## Environment
 
 - Quick verifier: `python scripts/verify_production_state.py` for internal beta readiness, and `python scripts/verify_production_state.py --strict` for public App Store blockers.
+- GitHub Actions verifier: run **Production State Check** manually from the Actions tab. Use `strict=false` for internal beta and `strict=true` before external beta or App Store submission.
 - `MONGODB_URI` points to the production Atlas cluster.
 - `MONGODB_DATABASE` is set to the production database name.
 - `CLERK_SECRET_KEY` and `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` are configured.
