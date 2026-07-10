@@ -202,6 +202,25 @@ export function money(value) {
   return `$${Number(value || 0).toLocaleString()}`;
 }
 
+// Missing report values must read as missing, never as demo numbers.
+export const NOT_AVAILABLE = "Not available";
+
+export function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+export function MissingDataNote({ message = NOT_AVAILABLE }) {
+  return (
+    <View style={styles.missingNote}>
+      <Text style={styles.missingNoteText}>{message}</Text>
+    </View>
+  );
+}
+
 export const sharedText = StyleSheet.create({
   sectionTitle: {
     color: palette.dark,
@@ -475,5 +494,20 @@ const styles = StyleSheet.create({
   errorCard: {
     backgroundColor: "#FFFBFB",
     borderColor: "#FAD1D1"
+  },
+  missingNote: {
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: palette.border,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    marginVertical: 6
+  },
+  missingNoteText: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "700",
+    lineHeight: 15
   }
 });

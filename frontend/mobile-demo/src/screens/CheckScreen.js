@@ -5,7 +5,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { Card } from "../components/Card";
-import { ErrorCard, Header, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
+import { ErrorCard, Header, MissingDataNote, numberOrNull, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
 import { extractContractFromAttachment, getMarketBundle, getOptionsChain, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -1279,6 +1279,9 @@ function InvestigationResults({ result, onBack, onDebate, onIssue }) {
       />
       <Card>
         <Text style={sharedText.sectionTitle}>Why RiskWise is hesitating</Text>
+        {!result.issues.length ? (
+          <MissingDataNote message="Review areas were not returned for this check." />
+        ) : null}
         {result.issues.map((issue) => (
           <Pressable key={issue.title} style={styles.issueRow} onPress={onIssue}>
             <View style={[styles.issueIcon, issue.tone === "risk" && styles.issueIconRisk, issue.tone === "warn" && styles.issueIconWarn]}>
@@ -1307,9 +1310,10 @@ function InvestigationResults({ result, onBack, onDebate, onIssue }) {
 }
 
 function CommitteeResults({ result, onBack }) {
+  const weakLink = result.issues[0]?.title;
   const agents = [
     ["Bull Analyst", "Structure aligns with the thesis, but only if price confirmation appears before theta eats the premium."],
-    ["Skeptic", `${result.issues[0].title} is the weak link. A correct direction can still lose if the contract is too expensive.`],
+    ["Skeptic", weakLink ? `${weakLink} is the weak link. A correct direction can still lose if the contract is too expensive.` : "No review areas were returned for this check, so the weak link is unknown. A correct direction can still lose if the contract is too expensive."],
     ["Risk Judge", `Account risk is ${result.accountRiskPercent.toFixed(2)}%. Sizing must be judged before conviction.`],
     ["Risk Manager", "The cleanest next step is defining what would invalidate the setup, not increasing exposure."]
   ];
@@ -1342,6 +1346,16 @@ function CommitteeResults({ result, onBack }) {
 
 function IssueDeepDive({ result, onBack }) {
   const issue = result.issues[0];
+  if (!issue) {
+    return (
+      <View>
+        <FlowTopBar title="Issue details" step={1} total={1} onBack={onBack} />
+        <Card>
+          <MissingDataNote message="No issue details available - review areas were not returned for this check." />
+        </Card>
+      </View>
+    );
+  }
   return (
     <View>
       <FlowTopBar title={issue.title} step={1} total={1} onBack={onBack} />
@@ -1398,7 +1412,7 @@ function StatusDot({ tone }) {
 function ScoreCircle({ value }) {
   return (
     <View style={styles.scoreCircle}>
-      <Text style={styles.scoreValue}>{value}</Text>
+      <Text style={styles.scoreValue}>{value ?? "--"}</Text>
       <Text style={styles.scoreOutOf}>/100</Text>
     </View>
   );
@@ -1764,23 +1778,26 @@ function buildBackendResult(report, draft, selectedTicker) {
   const riskMath = report?.riskMath || {};
   const decision = report?.decisionSnapshot || {};
   const label = report?.contractLabel || {};
-  const dataQuality = report?.dataQuality || {};
   const maxLoss = numberOrZero(riskMath.max_loss ?? riskMath.capital_at_risk ?? label.max_loss ?? report?.amountAtRisk);
   const breakeven = numberOrZero(riskMath.breakeven ?? riskMath.breakeven_price ?? label.breakeven);
   const requiredMovePercent = numberOrZero(riskMath.required_move_to_breakeven_pct ?? label.required_move_pct);
   const accountRiskPercent = numberOrZero(riskMath.risk_percent_of_account ?? label.account_risk_pct);
-  const score = numberOrZero(report?.setupScore ?? decision.setup_quality);
+  // Missing score/posture must read as missing ("--", neutral), never as a
+  // plausible mid-range check result.
+  const score = numberOrNull(report?.setupScore ?? decision.setup_quality);
   const riskPosture = String(report?.riskPosture || "").toLowerCase();
   const tone = riskPosture === "elevated" || report?.badge === "High Risk"
     ? "risk"
     : riskPosture === "controlled" || report?.badge === "Constructive Setup"
       ? "good"
-      : "warn";
-  const issues = buildBackendIssues(report, dataQuality, riskMath);
+      : riskPosture || report?.badge
+        ? "warn"
+        : "neutral";
+  const issues = buildBackendIssues(report);
   return {
     title: report?.title || `${draft.ticker || selectedTicker?.symbol || "Contract"} backend review`,
     subtitle: report?.subtitle || "Run the backend check to see authoritative risk math.",
-    score: score || 50,
+    score,
     tone,
     verdict: report?.badge || "Backend Review",
     verdictSub: report?.overallRead || "Backend math is the source of truth for this check.",
@@ -1792,9 +1809,12 @@ function buildBackendResult(report, draft, selectedTicker) {
   };
 }
 
-function buildBackendIssues(report, dataQuality, riskMath) {
+// Only maps review areas the backend actually returned. An empty docket
+// returns no issues; callers render a missing-data state instead of the old
+// hardcoded 70/48/78 placeholder cards.
+function buildBackendIssues(report) {
   const docket = Array.isArray(report?.agentDocket) ? report.agentDocket : [];
-  const docketIssues = docket.slice(0, 3).map((agent, index) => ({
+  return docket.slice(0, 3).map((agent, index) => ({
     title: agent.name || `Review Area ${index + 1}`,
     score: numberOrZero(agent.score),
     label: agent.read || "Review",
@@ -1806,28 +1826,6 @@ function buildBackendIssues(report, dataQuality, riskMath) {
     whatHelps: [agent.next_question].filter(Boolean),
     nextQuestion: agent.next_question || ""
   }));
-  if (docketIssues.length) {
-    return docketIssues;
-  }
-  const missing = Array.isArray(dataQuality?.missing) ? dataQuality.missing : [];
-  return [
-    {
-      title: "Backend risk math",
-      score: 70,
-      label: "Authoritative",
-      tone: "good",
-      icon: "calculator-outline",
-      detail: `Max loss, breakeven, and required move came from backend risk_math. Basis: ${riskMath.required_move_basis || "backend"}.`
-    },
-    {
-      title: "Missing data",
-      score: missing.length ? 48 : 78,
-      label: missing.length ? "Incomplete" : "Covered",
-      tone: missing.length ? "warn" : "good",
-      icon: "alert-circle-outline",
-      detail: missing.length ? `Missing: ${missing.join(", ")}.` : "No backend missing-data flags were returned."
-    }
-  ];
 }
 
 function numberOrZero(value) {

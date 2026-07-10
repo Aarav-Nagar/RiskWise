@@ -2,7 +2,7 @@ import React from "react";
 import { Image, Linking, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
-import { Header, money, ScreenScroll, sharedText } from "../components/Shared";
+import { Header, money, numberOrNull, ScreenScroll, sharedText } from "../components/Shared";
 import { getMarketBundle, getMarketProviderStatus, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -445,12 +445,14 @@ function filterSavedChecks(items, query, filter) {
     ].join(" ").toLowerCase();
     const matchesQuery = !clean || haystack.includes(clean);
     const posture = String(report.riskPosture || "").toLowerCase();
-    const riskScore = Number(report.riskScore || 0);
+    // A missing risk score must not place a check in any risk bucket
+    // (it previously coerced to 0 and landed in "Controlled").
+    const riskScore = numberOrNull(report.riskScore);
     const matchesFilter =
       filter === "All" ||
-      (filter === "High risk" && (posture.includes("high") || posture.includes("elevated") || riskScore >= 6.5)) ||
-      (filter === "Moderate" && (posture.includes("moderate") || posture.includes("mixed") || (riskScore >= 3.5 && riskScore < 6.5))) ||
-      (filter === "Controlled" && (posture.includes("controlled") || posture.includes("low") || riskScore < 3.5));
+      (filter === "High risk" && (posture.includes("high") || posture.includes("elevated") || (riskScore != null && riskScore >= 6.5))) ||
+      (filter === "Moderate" && (posture.includes("moderate") || posture.includes("mixed") || (riskScore != null && riskScore >= 3.5 && riskScore < 6.5))) ||
+      (filter === "Controlled" && (posture.includes("controlled") || posture.includes("low") || (riskScore != null && riskScore < 3.5)));
     return matchesQuery && matchesFilter;
   });
 }

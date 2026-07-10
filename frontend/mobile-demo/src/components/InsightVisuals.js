@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, Text, View } from "react-native";
 import Svg, { Circle, Defs, LinearGradient, Path, Polygon, Stop } from "react-native-svg";
 import { palette } from "../theme/theme";
+import { numberOrNull } from "./Shared";
 
 export function MiniLineChart({ data = [], height = 86, stroke = palette.green, fill = "rgba(22,163,74,0.12)" }) {
   const values = data.length ? data : [42, 46, 44, 51, 49, 58, 61, 57, 66, 70];
@@ -33,10 +34,12 @@ export function MiniLineChart({ data = [], height = 86, stroke = palette.green, 
   );
 }
 
-export function ConfidenceRing({ value = 72, label = "rules", sublabel = "coverage", size = 92 }) {
+export function ConfidenceRing({ value = null, label = "rules", sublabel = "coverage", size = 92 }) {
+  const number = numberOrNull(value);
   const radius = 36;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference * (1 - Math.max(0, Math.min(100, value)) / 100);
+  // Missing score renders an empty track and "--", never a demo ring.
+  const offset = number == null ? circumference : circumference * (1 - Math.max(0, Math.min(100, number)) / 100);
   return (
     <View style={[styles.ringWrap, { width: size, height: size }]}>
       <Svg width={size} height={size} viewBox="0 0 92 92">
@@ -45,7 +48,7 @@ export function ConfidenceRing({ value = 72, label = "rules", sublabel = "covera
           cx="46"
           cy="46"
           r={radius}
-          stroke={value >= 70 ? palette.green : palette.teal}
+          stroke={number != null && number >= 70 ? palette.green : palette.teal}
           strokeWidth="9"
           strokeLinecap="round"
           fill="none"
@@ -55,7 +58,7 @@ export function ConfidenceRing({ value = 72, label = "rules", sublabel = "covera
         />
       </Svg>
       <View style={styles.ringText}>
-        <Text style={styles.ringValue}>{value}</Text>
+        <Text style={styles.ringValue}>{number == null ? "--" : number}</Text>
         <Text style={styles.ringLabel}>{label}</Text>
       </View>
       <Text style={styles.ringSub}>{sublabel}</Text>
@@ -63,7 +66,9 @@ export function ConfidenceRing({ value = 72, label = "rules", sublabel = "covera
   );
 }
 
-export function IntelligenceStrip({ agreement = 72, agents = 5, pattern = "Risk-balanced setup", missing = 2 }) {
+export function IntelligenceStrip({ agreement = null, agents = 5, pattern = "Risk-balanced setup", missing = 2 }) {
+  const coverage = numberOrNull(agreement);
+  const coverageText = coverage == null ? "evidence coverage not available" : `${coverage}% evidence coverage`;
   return (
     <View style={styles.strip}>
       <View style={styles.pulseMark}>
@@ -71,7 +76,7 @@ export function IntelligenceStrip({ agreement = 72, agents = 5, pattern = "Risk-
       </View>
       <View style={styles.stripCopy}>
         <Text style={styles.stripTitle}>RiskWise is checking rule coverage</Text>
-        <Text style={styles.stripSub}>{agents}/5 review areas checked - {agreement}% evidence coverage - {pattern}</Text>
+        <Text style={styles.stripSub}>{agents}/5 review areas checked - {coverageText} - {pattern}</Text>
       </View>
       <View style={styles.missingBadge}>
         <Text style={styles.missingValue}>{missing}</Text>

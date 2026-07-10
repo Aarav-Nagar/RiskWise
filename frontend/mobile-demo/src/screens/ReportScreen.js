@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
 import { AgentRadar, ConfidenceRing, IntelligenceStrip, MiniLineChart, RiskBreakdownBars, ScenarioFanChart } from "../components/InsightVisuals";
 import { Pill } from "../components/Pill";
-import { Header, PrimaryButton, SecondaryButton, ScreenScroll, sharedText } from "../components/Shared";
+import { Header, MissingDataNote, numberOrNull, PrimaryButton, SecondaryButton, ScreenScroll, sharedText } from "../components/Shared";
 import { getOptionsContext } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -44,6 +44,8 @@ export function ReportScreen({ report, onAskAi, onSave, saveStatus }) {
     );
   }
 
+  const confidenceCurve = buildConfidenceCurve(report);
+
   return (
     <ScreenScroll>
       <Header title={`${report.ticker} Risk Brief`} subtitle={report.subtitle} right={<Pill label={report.riskPosture} tone="good" />} />
@@ -53,7 +55,7 @@ export function ReportScreen({ report, onAskAi, onSave, saveStatus }) {
       <IntelligenceStrip
         agreement={report.agentAgreement}
         agents={Array.isArray(report.agentDocket) ? Math.min(5, report.agentDocket.length || 5) : 5}
-        pattern={report.weakestLink ? `${report.weakestLink} is unresolved` : "Core rule checks complete"}
+        pattern={report.weakestLink ? `${report.weakestLink} is unresolved` : "weakest link not identified"}
         missing={report.dataQuality?.missing?.length ?? marketContext?.fields_pending?.length ?? 2}
       />
 
@@ -66,9 +68,13 @@ export function ReportScreen({ report, onAskAi, onSave, saveStatus }) {
           </View>
           <ConfidenceRing value={report.setupScore} label="rules" sublabel="coverage" />
         </View>
-        <View style={styles.heroChart}>
-          <MiniLineChart data={buildConfidenceCurve(report)} height={78} />
-        </View>
+        {confidenceCurve ? (
+          <View style={styles.heroChart}>
+            <MiniLineChart data={confidenceCurve} height={78} />
+          </View>
+        ) : (
+          <MissingDataNote message="Confidence curve not available - score data was not returned for this check." />
+        )}
         <ScenarioFanChart scenarios={report.scenarios} />
         <View style={styles.heroFooter}>
           <View style={styles.weakPill}>
@@ -160,7 +166,11 @@ function RiskMathPanel({ report }) {
       <Text style={sharedText.sectionTitle}>Risk Math</Text>
       <RiskCurve report={report} />
       <Text style={styles.sectionMiniTitle}>Pressure Breakdown</Text>
-      <RiskBreakdownBars items={breakdown} />
+      {breakdown.length ? (
+        <RiskBreakdownBars items={breakdown} />
+      ) : (
+        <MissingDataNote message="Pressure breakdown not available - backend risk math was not returned for this check." />
+      )}
       <View style={styles.panelDivider} />
       <View style={styles.mathGrid}>
         <MathItem label="Max loss" value={money(report.riskMath.max_loss)} />
@@ -229,8 +239,22 @@ function AgentsPanel({ report }) {
 }
 
 function RiskCurve({ report }) {
-  const risk = Number(report.riskMath?.risk_percent_of_account || 2);
-  const days = Number(report.riskMath?.trading_days_left || 15);
+  const risk = numberOrNull(report.riskMath?.risk_percent_of_account);
+  const days = numberOrNull(report.riskMath?.trading_days_left);
+  if (risk == null || days == null) {
+    return (
+      <View style={styles.riskCurve}>
+        <View style={styles.curveHeader}>
+          <View>
+            <Text style={styles.curveTitle}>Evidence completeness curve</Text>
+            <Text style={styles.curveSub}>Hand-built checklist pressure, not option-pricing output</Text>
+          </View>
+          <Text style={styles.curveBadge}>--</Text>
+        </View>
+        <MissingDataNote message="Curve not available - backend risk math was not returned for this check." />
+      </View>
+    );
+  }
   const curve = [22, 24 + risk * 5, 29 + risk * 7, 38 + Math.max(0, 12 - days), 44 + risk * 6, 52 + Math.max(0, 8 - days) * 2];
   return (
     <View style={styles.riskCurve}>
@@ -385,11 +409,16 @@ function money(value) {
   return `${sign}$${Math.abs(number).toLocaleString()}`;
 }
 
+// Returns null when the underlying scores are missing; callers must render a
+// missing-data state instead of passing a fabricated curve to the chart.
 function buildConfidenceCurve(report) {
-  const setup = Number(report.setupScore || 65);
-  const options = Number(report.decisionSnapshot?.options_structure || setup - 8);
-  const agreement = Number(report.agentAgreement || setup);
-  const risk = Number(report.riskScore || 5);
+  const setup = numberOrNull(report.setupScore);
+  const risk = numberOrNull(report.riskScore);
+  if (setup == null || risk == null) {
+    return null;
+  }
+  const agreement = numberOrNull(report.agentAgreement) ?? setup;
+  const options = numberOrNull(report.decisionSnapshot?.options_structure) ?? setup - 8;
   return [
     Math.max(20, setup - 18),
     Math.max(20, options - 8),
@@ -400,19 +429,33 @@ function buildConfidenceCurve(report) {
   ];
 }
 
+// Builds one row per input that actually exists on the report. Rows with
+// missing inputs are dropped, never synthesized from constants; an empty
+// result means the caller must show a missing-data state (RiskBreakdownBars
+// renders demo bars when given an empty list).
 function buildRiskBreakdown(report) {
-  const risk = Number(report.riskMath?.risk_percent_of_account || report.decisionSnapshot?.risk_budget_used || 2);
-  const days = Number(report.riskMath?.trading_days_left || 15);
-  const requiredMove = Number(report.riskMath?.required_move_to_breakeven_pct || 8);
-  const optionsStructure = Number(report.decisionSnapshot?.options_structure || report.setupScore || 60);
-  const dataGaps = Number(report.dataQuality?.missing?.length || 2);
-  return [
-    { label: "Position size", value: Math.min(100, 24 + risk * 18), tone: risk > 2 ? "risk" : "good" },
-    { label: "Time decay", value: Math.min(100, 86 - Math.min(days, 45)), tone: days < 12 ? "risk" : "warn" },
-    { label: "Breakeven move", value: Math.min(100, 28 + requiredMove * 5), tone: requiredMove > 10 ? "risk" : "warn" },
-    { label: "Contract structure", value: Math.max(12, 100 - optionsStructure), tone: optionsStructure < 60 ? "risk" : "good" },
-    { label: "Missing data", value: Math.min(100, 22 + dataGaps * 14), tone: dataGaps > 3 ? "risk" : "warn" }
-  ];
+  const rows = [];
+  const risk = numberOrNull(report.riskMath?.risk_percent_of_account ?? report.decisionSnapshot?.risk_budget_used);
+  if (risk != null) {
+    rows.push({ label: "Position size", value: Math.min(100, 24 + risk * 18), tone: risk > 2 ? "risk" : "good" });
+  }
+  const days = numberOrNull(report.riskMath?.trading_days_left);
+  if (days != null) {
+    rows.push({ label: "Time decay", value: Math.min(100, 86 - Math.min(days, 45)), tone: days < 12 ? "risk" : "warn" });
+  }
+  const requiredMove = numberOrNull(report.riskMath?.required_move_to_breakeven_pct);
+  if (requiredMove != null) {
+    rows.push({ label: "Breakeven move", value: Math.min(100, 28 + requiredMove * 5), tone: requiredMove > 10 ? "risk" : "warn" });
+  }
+  const optionsStructure = numberOrNull(report.decisionSnapshot?.options_structure ?? report.setupScore);
+  if (optionsStructure != null) {
+    rows.push({ label: "Contract structure", value: Math.max(12, 100 - optionsStructure), tone: optionsStructure < 60 ? "risk" : "good" });
+  }
+  const dataGaps = Array.isArray(report.dataQuality?.missing) ? report.dataQuality.missing.length : null;
+  if (dataGaps != null) {
+    rows.push({ label: "Missing data", value: Math.min(100, 22 + dataGaps * 14), tone: dataGaps > 3 ? "risk" : "warn" });
+  }
+  return rows;
 }
 
 const styles = StyleSheet.create({
