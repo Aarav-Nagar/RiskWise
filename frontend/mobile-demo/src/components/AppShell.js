@@ -14,11 +14,42 @@ export function AppShell({ activeTab, setActiveTab, disabledTabs, showTabs = tru
       <View style={styles.phone}>
         {showTabs ? <AmbientGlow /> : null}
         <PhoneStatusBar />
-        <View style={styles.screen}>{children}</View>
+        <View style={styles.screen}>
+          <AppErrorBoundary>{children}</AppErrorBoundary>
+        </View>
         {showTabs ? <BottomTabs activeTab={activeTab} setActiveTab={setActiveTab} disabledTabs={disabledTabs} /> : null}
       </View>
     </SafeAreaView>
   );
+}
+
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("AppShell caught a render error", error, info?.componentStack);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <View style={styles.errorFallback}>
+          <Text style={styles.errorTitle}>Something went wrong</Text>
+          <Text style={styles.errorMessage}>
+            {this.state.error?.message || "This screen failed to render."}
+          </Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function PhoneStatusBar() {
@@ -78,5 +109,23 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     zIndex: 1
+  },
+  errorFallback: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 24,
+    gap: 8
+  },
+  errorTitle: {
+    color: palette.dark,
+    fontSize: 17,
+    fontWeight: "900"
+  },
+  errorMessage: {
+    color: palette.muted,
+    fontSize: 13,
+    fontWeight: "600",
+    textAlign: "center"
   }
 });

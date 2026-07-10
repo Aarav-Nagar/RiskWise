@@ -82,6 +82,17 @@ export function IntelligenceStrip({ agreement = 72, agents = 5, pattern = "Risk-
 }
 
 export function ScenarioFanChart({ scenarios = [], height = 118 }) {
+  if (!Array.isArray(scenarios) || !scenarios.length) {
+    return (
+      <View style={styles.fanWrap}>
+        <View style={styles.fanHeader}>
+          <Text style={styles.fanTitle}>Unresolved risk sketch</Text>
+          <Text style={styles.fanSub}>Rule-of-thumb stress markers, not priced scenarios</Text>
+        </View>
+        <Text style={styles.fanEmpty}>No scenario data available</Text>
+      </View>
+    );
+  }
   const normalized = normalizeScenarios(scenarios);
   const values = normalized.map((item) => item.value);
   const min = Math.min(...values, -30);
@@ -153,13 +164,14 @@ export function RiskBreakdownBars({ items = [] }) {
 }
 
 export function AgentRadar({ agents = [] }) {
-  const normalized = (agents.length ? agents : [
-    { name: "Risk", score: 72 },
-    { name: "Signal", score: 58 },
-    { name: "Vol", score: 64 },
-    { name: "Size", score: 82 },
-    { name: "Coach", score: 68 }
-  ]).slice(0, 5);
+  if (!Array.isArray(agents) || !agents.length) {
+    return (
+      <View style={styles.radarWrap}>
+        <Text style={styles.radarEmpty}>No agent review data available</Text>
+      </View>
+    );
+  }
+  const normalized = agents.slice(0, 5);
   const center = 76;
   const maxRadius = 54;
   const points = normalized.map((agent, index) => {
@@ -211,22 +223,15 @@ export function AmbientGlow() {
 }
 
 function normalizeScenarios(scenarios) {
-  if (Array.isArray(scenarios) && scenarios.length) {
-    return scenarios.slice(0, 3).map((item, index) => {
-      const raw = item.pnl ?? item.return ?? item.value ?? item.amount ?? 0;
-      const value = Number(String(raw).replace(/[^0-9.-]/g, "")) || 0;
-      return {
-        label: item.label || item.name || ["Bear", "Base", "Bull"][index] || "Path",
-        value,
-        display: typeof raw === "string" ? raw : `${value > 0 ? "+" : ""}${value}%`
-      };
-    });
-  }
-  return [
-    { label: "Bear", value: -42, display: "-42%" },
-    { label: "Base", value: 12, display: "+12%" },
-    { label: "Bull", value: 61, display: "+61%" }
-  ];
+  return scenarios.slice(0, 3).map((item, index) => {
+    const raw = item.pnl ?? item.return ?? item.value ?? item.amount ?? 0;
+    const value = Number(String(raw).replace(/[^0-9.-]/g, "")) || 0;
+    return {
+      label: item.label || item.name || ["Bear", "Base", "Bull"][index] || "Path",
+      value,
+      display: typeof raw === "string" ? raw : `${value > 0 ? "+" : ""}${value}%`
+    };
+  });
 }
 
 function scenarioColor(value) {
@@ -334,6 +339,13 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     marginTop: 2
   },
+  fanEmpty: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    paddingVertical: 18,
+    textAlign: "center"
+  },
   breakdownWrap: {
     gap: 10,
     marginTop: 10
@@ -404,6 +416,14 @@ const styles = StyleSheet.create({
     color: palette.green,
     fontSize: 11,
     fontWeight: "900"
+  },
+  radarEmpty: {
+    flex: 1,
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    paddingVertical: 18,
+    textAlign: "center"
   },
   pulseMark: {
     width: 42,

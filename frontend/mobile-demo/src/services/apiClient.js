@@ -1,4 +1,3 @@
-import { baseReport } from "../data/mockData";
 import { API_BASE_URL } from "./config";
 
 let authTokenProvider = null;
@@ -176,7 +175,6 @@ export async function getSavedCheckExport(user, savedCheckId) {
 function normalizeBackendReport(data, draft) {
   return {
     id: data.id || `check-${Date.now()}`,
-    ...baseReport,
     title: data.title || `${draft.ticker.toUpperCase()} ${draft.tradeType}`,
     subtitle: data.subtitle || `$${draft.strike} Strike - ${draft.expiration} - ${draft.timeframe}`,
     ticker: data.ticker || draft.ticker.toUpperCase(),
@@ -185,26 +183,25 @@ function normalizeBackendReport(data, draft) {
     expiration: data.expiration || draft.expiration,
     amountAtRisk: data.amount_at_risk || Number(draft.amountAtRisk || 0),
     timeframe: data.timeframe || draft.timeframe,
-    badge: data.badge || baseReport.badge,
-    setupScore: data.setup_score ?? baseReport.setupScore,
-    riskScore: data.risk_score ?? baseReport.riskScore,
-    agentAgreement: data.agent_agreement ?? baseReport.agentAgreement,
-    checks: data.checks || baseReport.checks,
-    agents: data.agents || baseReport.agents,
-    scenarios: data.scenarios || baseReport.scenarios,
-    methodologyLabel: data.methodology_label || "Backend educational score",
-    insight: data.insight || baseReport.insight,
-    overallRead: data.overall_read || "Review the trade structure before deciding",
-    weakestLink: data.weakest_link || "Position sizing",
-    riskPosture: data.risk_posture || "Mixed",
+    badge: data.badge ?? null,
+    setupScore: data.setup_score ?? null,
+    riskScore: data.risk_score ?? null,
+    agentAgreement: data.agent_agreement ?? null,
+    checks: data.checks || [],
+    agents: data.agents || [],
+    scenarios: data.scenarios || [],
+    methodologyLabel: data.methodology_label ?? null,
+    insight: data.insight ?? null,
+    overallRead: data.overall_read ?? null,
+    weakestLink: data.weakest_link ?? null,
+    riskPosture: data.risk_posture ?? null,
     decisionSnapshot: data.decision_snapshot || {},
     riskMath: data.risk_math || {},
     agentDocket: data.agent_docket || [],
     agreementMap: data.agreement_map || {},
     questions: data.questions || [],
     contractLabel: data.contract_label || {},
-    setupDebate: data.setup_debate || {}
-    ,
+    setupDebate: data.setup_debate || {},
     contractSnapshot: data.contract_snapshot || {},
     dataQuality: data.data_quality || {}
   };
