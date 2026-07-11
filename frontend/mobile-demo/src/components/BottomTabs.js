@@ -14,8 +14,7 @@ export function BottomTabs({ activeTab, setActiveTab, disabledTabs = [] }) {
   return (
     <View style={styles.tabBar}>
       {tabs.map(([name, icon]) => {
-        const homeSubPages = [];
-        const isActive = activeTab === name || (name === "Check" && activeTab === "Report") || (name === "Home" && homeSubPages.includes(activeTab));
+        const isActive = activeTab === name || (name === "Check" && activeTab === "Report");
         return (
         <Pressable
           key={name}

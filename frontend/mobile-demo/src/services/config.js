@@ -7,4 +7,3 @@ if (!rawBaseUrl) {
 }
 
 export const API_BASE_URL = rawBaseUrl;
-export const USE_API = true;
