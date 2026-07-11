@@ -8,6 +8,7 @@
     "web": "expo start --web",
     "export:web": "expo export -p web --output-dir dist-web",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
     "qa:smoke": "npm run export:web && playwright test --config=playwright.config.cjs",
     "qa:smoke:headed": "npm run export:web && playwright test --config=playwright.config.cjs --headed",
     "doctor": "npx expo-doctor",
@@ -42,6 +43,7 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@playwright/test": "^1.60.0",
+    "eslint": "^9.39.5",
     "typescript": "^5.3.3"
   }
 }
