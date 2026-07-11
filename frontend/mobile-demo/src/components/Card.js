@@ -13,8 +13,8 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: "rgba(230,234,230,0.9)",
-    shadowColor: "#12351B",
+    borderColor: palette.borderA90,
+    shadowColor: palette.shadow,
     shadowOpacity: 0.09,
     shadowRadius: 26,
     shadowOffset: { width: 0, height: 14 }

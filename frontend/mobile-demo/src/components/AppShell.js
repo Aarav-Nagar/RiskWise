@@ -83,8 +83,8 @@ const styles = StyleSheet.create({
     borderRadius: 34,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.08)",
-    shadowColor: "#000",
+    borderColor: palette.blackA08,
+    shadowColor: palette.black,
     shadowOpacity: 0.18,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 12 }

@@ -44,7 +44,7 @@ const styles = StyleSheet.create({
     height: 92,
     borderRadius: 46,
     borderWidth: 9,
-    borderColor: "#BEEBCB",
+    borderColor: palette.mint,
     borderLeftColor: palette.green,
     borderBottomColor: palette.green,
     alignItems: "center",
@@ -57,7 +57,7 @@ const styles = StyleSheet.create({
     borderRadius: 31,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF"
+    backgroundColor: palette.card
   },
   number: {
     color: palette.dark,
@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
     width: 108,
     height: 16,
     borderRadius: 999,
-    backgroundColor: "#E5E7EB",
+    backgroundColor: palette.track,
     overflow: "hidden",
     marginBottom: 10
   },

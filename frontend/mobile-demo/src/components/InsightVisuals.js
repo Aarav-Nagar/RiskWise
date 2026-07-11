@@ -4,7 +4,7 @@ import Svg, { Circle, Defs, LinearGradient, Path, Polygon, Stop } from "react-na
 import { palette } from "../theme/theme";
 import { numberOrNull } from "./Shared";
 
-export function MiniLineChart({ data = [], height = 86, stroke = palette.green, fill = "rgba(22,163,74,0.12)" }) {
+export function MiniLineChart({ data = [], height = 86, stroke = palette.green, fill = palette.greenA12 }) {
   const values = data.length ? data : [42, 46, 44, 51, 49, 58, 61, 57, 66, 70];
   const width = 280;
   const min = Math.min(...values);
@@ -43,7 +43,7 @@ export function ConfidenceRing({ value = null, label = "rules", sublabel = "cove
   return (
     <View style={[styles.ringWrap, { width: size, height: size }]}>
       <Svg width={size} height={size} viewBox="0 0 92 92">
-        <Circle cx="46" cy="46" r={radius} stroke="#EAF1EA" strokeWidth="9" fill="#FFFFFF" />
+        <Circle cx="46" cy="46" r={radius} stroke={palette.hairline} strokeWidth="9" fill={palette.white} />
         <Circle
           cx="46"
           cy="46"
@@ -125,7 +125,7 @@ export function ScenarioFanChart({ scenarios = [], height = 118 }) {
             <Stop offset="1" stopColor={palette.green} stopOpacity="0.18" />
           </LinearGradient>
         </Defs>
-        <Path d={`M 20 ${zero.toFixed(1)} H 258`} stroke="#DCEBDD" strokeWidth="1.4" strokeDasharray="5 5" />
+        <Path d={`M 20 ${zero.toFixed(1)} H 258`} stroke={palette.chartGrid} strokeWidth="1.4" strokeDasharray="5 5" />
         <Path d={`${line} L 258 ${height - 12} L 20 ${height - 12} Z`} fill="url(#fanGradient)" />
         <Path d={line} fill="none" stroke={palette.dark} strokeOpacity="0.72" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" />
         {points.map((point) => (
@@ -197,9 +197,9 @@ export function AgentRadar({ agents = [] }) {
       <View style={styles.radarGraphic}>
         <Svg viewBox="0 0 152 152" width="152" height="152">
           {[18, 36, 54].map((radius) => (
-            <Circle key={radius} cx={center} cy={center} r={radius} fill="none" stroke="#DCEBDD" strokeWidth="1" />
+            <Circle key={radius} cx={center} cy={center} r={radius} fill="none" stroke={palette.chartGrid} strokeWidth="1" />
           ))}
-          <Polygon points={polygon} fill="rgba(22,163,74,0.18)" stroke={palette.green} strokeWidth="2.4" />
+          <Polygon points={polygon} fill={palette.greenA18} stroke={palette.green} strokeWidth="2.4" />
           {points.map((point) => (
             <Circle key={point.name} cx={point.x} cy={point.y} r="3.8" fill={point.score >= 70 ? palette.green : palette.teal} />
           ))}
@@ -292,9 +292,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     padding: 13,
     marginBottom: 12,
-    backgroundColor: "rgba(255,255,255,0.88)",
+    backgroundColor: palette.whiteA88,
     borderWidth: 1,
-    borderColor: "rgba(207,239,216,0.95)",
+    borderColor: palette.greenBorderA95,
     shadowColor: palette.green,
     shadowOpacity: 0.12,
     shadowRadius: 22,
@@ -302,9 +302,9 @@ const styles = StyleSheet.create({
   },
   fanWrap: {
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.74)",
+    backgroundColor: palette.whiteA74,
     borderWidth: 1,
-    borderColor: "rgba(207,239,216,0.9)",
+    borderColor: palette.greenBorderA90,
     padding: 12,
     marginTop: 12,
     shadowColor: palette.green,
@@ -376,7 +376,7 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 999,
     overflow: "hidden",
-    backgroundColor: "#EAF1EA"
+    backgroundColor: palette.hairline
   },
   breakdownFill: {
     height: "100%",
@@ -387,9 +387,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 14,
     borderRadius: 18,
-    backgroundColor: "#FBFFFC",
+    backgroundColor: palette.greenTint,
     borderWidth: 1,
-    borderColor: "#DCEBDD",
+    borderColor: palette.chartGrid,
     padding: 12,
     marginTop: 12
   },
@@ -408,7 +408,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     borderBottomWidth: 1,
-    borderBottomColor: "#EAF2EA",
+    borderBottomColor: palette.hairline,
     paddingBottom: 6
   },
   radarName: {
@@ -434,11 +434,11 @@ const styles = StyleSheet.create({
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: "rgba(22,163,74,0.10)",
+    backgroundColor: palette.greenA10,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
-    borderColor: "rgba(22,163,74,0.20)"
+    borderColor: palette.greenA20
   },
   pulseCore: {
     width: 17,
@@ -490,20 +490,20 @@ const styles = StyleSheet.create({
     height: 230,
     top: 38,
     right: -110,
-    backgroundColor: "rgba(22,163,74,0.12)"
+    backgroundColor: palette.greenA12
   },
   glowTwo: {
     width: 180,
     height: 180,
     bottom: 90,
     left: -80,
-    backgroundColor: "rgba(14,165,233,0.08)"
+    backgroundColor: palette.tealA08
   },
   glowThree: {
     width: 160,
     height: 160,
     top: 310,
     left: 130,
-    backgroundColor: "rgba(22,163,74,0.07)"
+    backgroundColor: palette.greenA07
   }
 });

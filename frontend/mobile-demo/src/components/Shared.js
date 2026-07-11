@@ -46,7 +46,7 @@ export function Field({
           onChangeText={onChangeText}
           style={styles.input}
           placeholder={placeholder}
-          placeholderTextColor="#9AA5A0"
+          placeholderTextColor={palette.placeholder}
           secureTextEntry={secureTextEntry}
           keyboardType={keyboardType}
           autoCapitalize={autoCapitalize}
@@ -126,7 +126,7 @@ const webSelectStyle = {
   border: `1px solid ${palette.border}`,
   borderRadius: 12,
   padding: "0 12px",
-  backgroundColor: "#FBFCFB",
+  backgroundColor: palette.greenTint,
   color: palette.dark,
   fontWeight: "800",
   fontSize: 13,
@@ -320,11 +320,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FBFCFB"
+    backgroundColor: palette.greenTint
   },
   fieldError: {
     borderColor: palette.red,
-    backgroundColor: "#FFFBFB"
+    backgroundColor: palette.redMist
   },
   input: {
     flex: 1,
@@ -360,14 +360,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.border,
     borderRadius: 12,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     overflow: "hidden"
   },
   option: {
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#F0F3F0"
+    borderBottomColor: palette.borderSoft
   },
   optionActive: {
     backgroundColor: palette.greenSoft
@@ -394,12 +394,12 @@ const styles = StyleSheet.create({
     opacity: 0.65
   },
   primaryButtonText: {
-    color: "#FFFFFF",
+    color: palette.white,
     fontSize: 15,
     fontWeight: "900"
   },
   primaryButtonArrow: {
-    color: "#FFFFFF",
+    color: palette.white,
     fontSize: 15,
     fontWeight: "900"
   },
@@ -411,7 +411,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 14,
-    backgroundColor: "#FFFFFF"
+    backgroundColor: palette.card
   },
   secondaryButtonText: {
     color: palette.green,
@@ -421,7 +421,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    backgroundColor: "#FEFFFE"
+    backgroundColor: palette.card
   },
   aiCardCompact: {
     marginTop: 0
@@ -445,7 +445,7 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#DFF8EA",
+    backgroundColor: palette.greenChip,
     shadowColor: palette.green,
     shadowOpacity: 0.2,
     shadowRadius: 16
@@ -466,7 +466,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 999,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     borderWidth: 1,
     borderColor: palette.border,
     marginRight: 8
@@ -481,7 +481,7 @@ const styles = StyleSheet.create({
     fontSize: 12
   },
   chipTextActive: {
-    color: "#FFFFFF"
+    color: palette.white
   },
   statCard: {
     width: "31%",
@@ -506,8 +506,8 @@ const styles = StyleSheet.create({
   bodyText: sharedText.bodyText,
   microcopy: sharedText.microcopy,
   errorCard: {
-    backgroundColor: "#FFFBFB",
-    borderColor: "#FAD1D1"
+    backgroundColor: palette.redMist,
+    borderColor: palette.redBorder
   },
   missingNote: {
     borderWidth: 1,

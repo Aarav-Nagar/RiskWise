@@ -13,6 +13,7 @@ import { ReportScreen } from "./screens/ReportScreen";
 import { ChatScreen } from "./screens/ChatScreen";
 import { clearRiskWiseContext, configureAuthService, deleteRiskWiseAccount, lookupProfileByEmail, requestPasswordReset, syncClerkProfile, updateProfileSettings } from "./services/authService";
 import { configureApiAuth, generateTradeCheck, listSavedChecks, saveCheck } from "./services/apiClient";
+import { palette } from "./theme/theme";
 
 export default function App() {
   if (!hasClerkRuntime()) {
@@ -903,14 +904,14 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     bottom: 74,
-    backgroundColor: "rgba(247,249,247,0.92)",
+    backgroundColor: palette.bgTranslucent,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 18
   },
   onboardingCard: {
-    borderColor: "#BCEAC9",
-    backgroundColor: "#FBFFFC"
+    borderColor: palette.mint,
+    backgroundColor: palette.greenTint
   },
   loadingScreen: {
     flex: 1,

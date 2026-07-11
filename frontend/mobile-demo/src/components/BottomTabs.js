@@ -25,7 +25,7 @@ export function BottomTabs({ activeTab, setActiveTab, disabledTabs = [] }) {
             <Ionicons
               name={icon}
               size={22}
-              color={isActive ? palette.green : "#A3AEA6"}
+              color={isActive ? palette.green : palette.placeholder}
             />
           </View>
           <Text style={[styles.tabLabel, isActive && styles.active]}>{name}</Text>
@@ -45,11 +45,11 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 8,
     flexDirection: "row",
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     borderWidth: 1,
-    borderColor: "#EAF0EA",
+    borderColor: palette.hairline,
     borderRadius: 34,
-    shadowColor: "#16351D",
+    shadowColor: palette.shadow,
     shadowOpacity: 0.12,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 10 }
@@ -68,7 +68,7 @@ const styles = StyleSheet.create({
     justifyContent: "center"
   },
   iconActive: {
-    backgroundColor: "#F0FAF2"
+    backgroundColor: palette.greenMist
   },
   tabLabel: {
     color: palette.muted,
