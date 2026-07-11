@@ -558,9 +558,9 @@ const styles = StyleSheet.create({
     width: 34,
     height: 34,
     borderRadius: 12,
-    backgroundColor: "#F0FBF3",
+    backgroundColor: palette.greenMist,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
+    borderColor: palette.greenBorder,
     alignItems: "center",
     justifyContent: "center"
   },
@@ -598,8 +598,8 @@ const styles = StyleSheet.create({
     borderRadius: 22
   },
   valueCard: {
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E4ECE5",
+    backgroundColor: palette.card,
+    borderColor: palette.border,
     borderRadius: 22,
     padding: 16
   },
@@ -623,8 +623,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 5,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
-    backgroundColor: "#F3FFF6",
+    borderColor: palette.greenBorder,
+    backgroundColor: palette.greenMist,
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 6
@@ -643,9 +643,9 @@ const styles = StyleSheet.create({
   miniStat: {
     flexGrow: 1,
     flexBasis: 96,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     borderWidth: 1,
-    borderColor: "#DDEFE2",
+    borderColor: palette.greenBorder,
     borderRadius: 14,
     padding: 10,
     minHeight: 76
@@ -669,7 +669,7 @@ const styles = StyleSheet.create({
     marginTop: 13,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: "#E7F4EA"
+    borderTopColor: palette.greenSoft
   },
   trustText: {
     color: palette.muted,
@@ -685,11 +685,11 @@ const styles = StyleSheet.create({
     width: "100%",
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: "#DDF1E2",
-    backgroundColor: "#FFFFFF",
+    borderColor: palette.greenBorder,
+    backgroundColor: palette.card,
     padding: 14,
     marginTop: 16,
-    shadowColor: "#16351D",
+    shadowColor: palette.shadow,
     shadowOpacity: 0.08,
     shadowRadius: 20,
     shadowOffset: { width: 0, height: 10 },
@@ -702,7 +702,7 @@ const styles = StyleSheet.create({
     width: 124,
     height: 124,
     borderRadius: 62,
-    backgroundColor: "#DFF8EA",
+    backgroundColor: palette.greenChip,
     opacity: 0.8
   },
   previewHeader: {
@@ -736,14 +736,14 @@ const styles = StyleSheet.create({
   },
   previewLine: {
     height: 9,
-    backgroundColor: "#EEF4EF",
+    backgroundColor: palette.borderSoft,
     borderRadius: 999,
     overflow: "hidden",
     marginTop: 12
   },
   previewLineFill: {
     height: "100%",
-    backgroundColor: "#8AC94B"
+    backgroundColor: palette.lime
   },
   previewRows: {
     flexDirection: "row",
@@ -753,7 +753,7 @@ const styles = StyleSheet.create({
   },
   previewCheck: {
     color: palette.green,
-    backgroundColor: "#F3FFF6",
+    backgroundColor: palette.greenMist,
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 5,
@@ -772,7 +772,7 @@ const styles = StyleSheet.create({
   miniDocket: {
     marginTop: 14,
     borderTopWidth: 1,
-    borderTopColor: "#EEF4EF",
+    borderTopColor: palette.borderSoft,
     paddingTop: 12,
     gap: 8
   },
@@ -792,7 +792,7 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 7,
     borderRadius: 999,
-    backgroundColor: "#ECF0ED",
+    backgroundColor: palette.borderSoft,
     overflow: "hidden"
   },
   docketFill: {
@@ -843,9 +843,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 10,
-    backgroundColor: "#F3FFF6",
+    backgroundColor: palette.greenMist,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
+    borderColor: palette.greenBorder,
     borderRadius: 14,
     padding: 12,
     marginBottom: 12
@@ -888,7 +888,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF"
+    backgroundColor: palette.card
   },
   choiceActive: {
     backgroundColor: palette.greenSoft,
@@ -903,8 +903,8 @@ const styles = StyleSheet.create({
     color: palette.green
   },
   safetyCard: {
-    backgroundColor: "#F6FFF8",
-    borderColor: "#CFEFD8"
+    backgroundColor: palette.greenMist,
+    borderColor: palette.greenBorder
   },
   checkBoxRow: {
     flexDirection: "row",
@@ -912,7 +912,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     borderRadius: 14,
     padding: 12,
     marginBottom: 12
@@ -929,14 +929,14 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF"
+    backgroundColor: palette.card
   },
   checkBoxActive: {
     backgroundColor: palette.green,
     borderColor: palette.green
   },
   checkMark: {
-    color: "#FFFFFF",
+    color: palette.white,
     fontSize: 10,
     fontWeight: "900"
   },

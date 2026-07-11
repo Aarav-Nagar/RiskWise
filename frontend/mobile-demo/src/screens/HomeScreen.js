@@ -188,7 +188,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
             value={query}
             onChangeText={handleQuery}
             placeholder="Type ticker or company..."
-            placeholderTextColor="#98A39D"
+            placeholderTextColor={palette.placeholder}
             autoCapitalize="characters"
             style={styles.searchInput}
           />
@@ -210,7 +210,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
         </View>
 
         <Pressable style={[styles.checkButton, !selectedStock && styles.buttonDisabled]} onPress={openCheck}>
-          <Ionicons name="location-outline" size={18} color="#FFFFFF" />
+          <Ionicons name="location-outline" size={18} color={palette.white} />
           <Text style={styles.checkText}>{selectedStock ? `Risk-check ${selectedStock.symbol}` : "Select a ticker first"}</Text>
         </Pressable>
       </Card>
@@ -255,7 +255,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
               value={savedQuery}
               onChangeText={setSavedQuery}
               placeholder="Find saved context..."
-              placeholderTextColor="#98A39D"
+              placeholderTextColor={palette.placeholder}
               style={styles.savedSearchInput}
             />
           </View>
@@ -365,7 +365,7 @@ function OptionsReadinessCard({ stock, context, loading }) {
       <View style={styles.dataFieldRow}>
         {pendingLabels.map((field) => (
           <View key={field} style={[styles.dataFieldChip, styles.optionsMissingChip]}>
-            <Ionicons name={ready && !pending.length ? "checkmark-circle-outline" : "ellipse-outline"} size={13} color={ready && !pending.length ? palette.green : "#B45309"} />
+            <Ionicons name={ready && !pending.length ? "checkmark-circle-outline" : "ellipse-outline"} size={13} color={ready && !pending.length ? palette.green : palette.warnDeep} />
             <Text style={styles.dataFieldText}>{field}</Text>
           </View>
         ))}
@@ -564,7 +564,7 @@ function friendlyField(value) {
 
 const styles = StyleSheet.create({
   selectorCard: {
-    backgroundColor: "#FBFFFC"
+    backgroundColor: palette.greenTint
   },
   selectorTop: {
     flexDirection: "row",
@@ -587,8 +587,8 @@ const styles = StyleSheet.create({
   accountPill: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
-    backgroundColor: "#F3FFF6",
+    borderColor: palette.greenBorder,
+    backgroundColor: palette.greenMist,
     paddingHorizontal: 11,
     paddingVertical: 8,
     alignItems: "flex-end"
@@ -609,7 +609,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     flexDirection: "row",
     alignItems: "center",
     gap: 9,
@@ -626,7 +626,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: palette.border,
     borderRadius: 16,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     marginTop: 8,
     overflow: "hidden"
   },
@@ -637,10 +637,10 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 10,
     borderBottomWidth: 1,
-    borderBottomColor: "#F0F3F0"
+    borderBottomColor: palette.borderSoft
   },
   matchRowActive: {
-    backgroundColor: "#F4FCF6"
+    backgroundColor: palette.greenMist
   },
   symbolBadge: {
     width: 48,
@@ -683,20 +683,20 @@ const styles = StyleSheet.create({
     opacity: 0.5
   },
   checkText: {
-    color: "#FFFFFF",
+    color: palette.white,
     fontSize: 14,
     fontWeight: "900"
   },
   snapshotCard: {
-    backgroundColor: "#FFFFFF"
+    backgroundColor: palette.card
   },
   dataStatusCard: {
-    backgroundColor: "#FBFFFC",
-    borderColor: "#DDF3E3"
+    backgroundColor: palette.greenTint,
+    borderColor: palette.greenBorder
   },
   optionsReadinessCard: {
-    backgroundColor: "#FFFCF4",
-    borderColor: "#F2DFA8"
+    backgroundColor: palette.warnSoft,
+    borderColor: palette.warnBorder
   },
   optionsReadinessTitle: {
     color: palette.dark,
@@ -710,12 +710,12 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     backgroundColor: palette.greenSoft,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
+    borderColor: palette.greenBorder,
     maxWidth: 130
   },
   optionsStatusPillWarn: {
-    backgroundColor: "#FFF7E6",
-    borderColor: "#F1D39A"
+    backgroundColor: palette.warnSoft,
+    borderColor: palette.warnBorder
   },
   optionsStatusText: {
     color: palette.green,
@@ -724,10 +724,10 @@ const styles = StyleSheet.create({
     textTransform: "capitalize"
   },
   optionsStatusTextWarn: {
-    color: "#B45309"
+    color: palette.warnDeep
   },
   optionsMissingChip: {
-    backgroundColor: "#FFFFFF"
+    backgroundColor: palette.card
   },
   dataStatusTitle: {
     color: palette.dark,
@@ -740,11 +740,11 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     backgroundColor: palette.greenSoft,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
+    borderColor: palette.greenBorder,
     maxWidth: 120
   },
   dataStatusPillMuted: {
-    backgroundColor: "#F3F5F3",
+    backgroundColor: palette.bg,
     borderColor: palette.border
   },
   dataStatusPillText: {
@@ -765,8 +765,8 @@ const styles = StyleSheet.create({
   dataFieldChip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#DDF3E3",
-    backgroundColor: "#FFFFFF",
+    borderColor: palette.greenBorder,
+    backgroundColor: palette.card,
     paddingHorizontal: 9,
     paddingVertical: 6,
     flexDirection: "row",
@@ -803,11 +803,11 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     backgroundColor: palette.greenSoft,
     borderWidth: 1,
-    borderColor: "#CFEFD8"
+    borderColor: palette.greenBorder
   },
   changePillDown: {
-    backgroundColor: "#FFF5F5",
-    borderColor: "#F5D1D1"
+    backgroundColor: palette.redMist,
+    borderColor: palette.redBorder
   },
   changeText: {
     color: palette.green,
@@ -827,7 +827,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FBFCFB",
+    backgroundColor: palette.greenTint,
     padding: 10
   },
   miniDatumCompact: {
@@ -865,7 +865,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     paddingVertical: 7,
     paddingHorizontal: 11
   },
@@ -879,13 +879,13 @@ const styles = StyleSheet.create({
     fontWeight: "900"
   },
   watchChipTextActive: {
-    color: "#FFFFFF"
+    color: palette.white
   },
   newsCard: {
     height: 148,
     borderRadius: 18,
     overflow: "hidden",
-    backgroundColor: "#E9F1EA",
+    backgroundColor: palette.hairline,
     marginTop: 9
   },
   newsImage: {
@@ -898,23 +898,23 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     padding: 12,
-    backgroundColor: "rgba(13, 24, 20, 0.64)"
+    backgroundColor: palette.scrim
   },
   newsSource: {
     alignSelf: "flex-start",
     borderRadius: 999,
-    backgroundColor: "rgba(255,255,255,0.18)",
+    backgroundColor: palette.whiteA18,
     paddingHorizontal: 8,
     paddingVertical: 4,
     marginBottom: 7
   },
   newsSourceText: {
-    color: "#FFFFFF",
+    color: palette.white,
     fontSize: 9,
     fontWeight: "900"
   },
   newsTitle: {
-    color: "#FFFFFF",
+    color: palette.white,
     fontSize: 14,
     lineHeight: 18,
     fontWeight: "900"
@@ -985,7 +985,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FBFCFB",
+    backgroundColor: palette.greenTint,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
@@ -1010,7 +1010,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     paddingVertical: 7,
     paddingHorizontal: 10
   },
@@ -1047,8 +1047,8 @@ const styles = StyleSheet.create({
     height: 34,
     borderRadius: 13,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
-    backgroundColor: "#FBFFFC",
+    borderColor: palette.greenBorder,
+    backgroundColor: palette.greenTint,
     alignItems: "center",
     justifyContent: "center"
   },

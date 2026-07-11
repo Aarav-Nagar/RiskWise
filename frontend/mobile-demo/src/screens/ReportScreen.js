@@ -265,7 +265,7 @@ function RiskCurve({ report }) {
         </View>
         <Text style={styles.curveBadge}>{risk.toFixed(1)}%</Text>
       </View>
-      <MiniLineChart data={curve} height={74} stroke={risk > 2 ? palette.teal : palette.green} fill={risk > 2 ? "rgba(14,165,233,0.14)" : "rgba(22,163,74,0.14)"} />
+      <MiniLineChart data={curve} height={74} stroke={risk > 2 ? palette.teal : palette.green} fill={risk > 2 ? palette.tealA14 : palette.greenA14} />
     </View>
   );
 }
@@ -454,8 +454,8 @@ function buildRiskBreakdown(report) {
 
 const styles = StyleSheet.create({
   methodology: {
-    backgroundColor: "#F3FBFF",
-    borderColor: "#CFEFFF",
+    backgroundColor: palette.infoSoft,
+    borderColor: palette.infoBorder,
     borderWidth: 1,
     borderRadius: 14,
     paddingVertical: 9,
@@ -468,8 +468,8 @@ const styles = StyleSheet.create({
     fontWeight: "800"
   },
   heroCard: {
-    backgroundColor: "#FBFFFC",
-    borderColor: "#CFEFD8",
+    backgroundColor: palette.greenTint,
+    borderColor: palette.greenBorder,
     overflow: "hidden",
     shadowColor: palette.green,
     shadowOpacity: 0.15,
@@ -483,7 +483,7 @@ const styles = StyleSheet.create({
     borderRadius: 105,
     right: -82,
     top: -76,
-    backgroundColor: "rgba(22,163,74,0.12)"
+    backgroundColor: palette.greenA12
   },
   heroTop: {
     flexDirection: "row",
@@ -505,8 +505,8 @@ const styles = StyleSheet.create({
     height: 72,
     borderRadius: 36,
     borderWidth: 7,
-    borderColor: "#CFEFD8",
-    backgroundColor: "#FFFFFF",
+    borderColor: palette.greenBorder,
+    backgroundColor: palette.card,
     alignItems: "center",
     justifyContent: "center"
   },
@@ -524,9 +524,9 @@ const styles = StyleSheet.create({
   heroChart: {
     marginTop: 12,
     borderRadius: 18,
-    backgroundColor: "rgba(234,248,238,0.55)",
+    backgroundColor: palette.greenSoftA55,
     borderWidth: 1,
-    borderColor: "rgba(207,239,216,0.8)",
+    borderColor: palette.greenBorderA80,
     padding: 8
   },
   heroFooter: {
@@ -539,13 +539,13 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: palette.greenSoft,
     borderWidth: 1,
-    borderColor: "#CFEFD8",
+    borderColor: palette.greenBorder,
     padding: 10
   },
   weakPillAlt: {
     flex: 1,
     borderRadius: 16,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     borderWidth: 1,
     borderColor: palette.border,
     padding: 10
@@ -599,8 +599,8 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
     borderWidth: 1,
-    borderColor: "#E2ECE3",
-    backgroundColor: "#FBFDFB",
+    borderColor: palette.border,
+    backgroundColor: palette.greenTint,
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 5,
@@ -617,7 +617,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 6
@@ -632,7 +632,7 @@ const styles = StyleSheet.create({
     fontWeight: "900"
   },
   panelTabTextActive: {
-    color: "#FFFFFF"
+    color: palette.white
   },
   panelDivider: {
     height: 1,
@@ -662,9 +662,9 @@ const styles = StyleSheet.create({
   contractLabel: {
     marginTop: 12,
     borderWidth: 1,
-    borderColor: "#DCEBDD",
+    borderColor: palette.chartGrid,
     borderRadius: 16,
-    backgroundColor: "#FBFFFC",
+    backgroundColor: palette.greenTint,
     overflow: "hidden"
   },
   labelRow: {
@@ -672,7 +672,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#EAF2EA",
+    borderBottomColor: palette.hairline,
     paddingVertical: 10,
     paddingHorizontal: 12
   },
@@ -699,7 +699,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FCFDFC",
+    backgroundColor: palette.greenTint,
     padding: 13
   },
   tileLabel: {
@@ -727,9 +727,9 @@ const styles = StyleSheet.create({
   },
   riskCurve: {
     borderRadius: 18,
-    backgroundColor: "#FBFEFB",
+    backgroundColor: palette.greenTint,
     borderWidth: 1,
-    borderColor: "#E2EEE4",
+    borderColor: palette.border,
     padding: 12,
     marginBottom: 12
   },
@@ -765,7 +765,7 @@ const styles = StyleSheet.create({
     width: "31.3%",
     minHeight: 76,
     borderRadius: 14,
-    backgroundColor: "#F8FAF8",
+    backgroundColor: palette.bg,
     borderWidth: 1,
     borderColor: palette.border,
     padding: 10,
@@ -786,16 +786,16 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     padding: 12
   },
   debateGood: {
-    backgroundColor: "#FBFFFC",
-    borderColor: "#D7F0DE"
+    backgroundColor: palette.greenTint,
+    borderColor: palette.greenBorder
   },
   debateWarn: {
-    backgroundColor: "#F3FBFF",
-    borderColor: "#CFEFFF"
+    backgroundColor: palette.infoSoft,
+    borderColor: palette.infoBorder
   },
   debateTitle: {
     color: palette.dark,
@@ -820,20 +820,20 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: palette.card,
     padding: 13,
     marginTop: 9
   },
   conversationGood: {
-    borderColor: "#CFEFD8",
-    backgroundColor: "#FBFFFC"
+    borderColor: palette.greenBorder,
+    backgroundColor: palette.greenTint
   },
   conversationWarn: {
-    borderColor: "#CFEFFF",
-    backgroundColor: "#F6FCFF"
+    borderColor: palette.infoBorder,
+    backgroundColor: palette.infoSoft
   },
   conversationCoach: {
-    borderColor: "#D7F0DE",
+    borderColor: palette.greenBorder,
     backgroundColor: palette.greenSoft
   },
   conversationHeader: {
@@ -896,7 +896,7 @@ const styles = StyleSheet.create({
   agentTrack: {
     height: 8,
     borderRadius: 999,
-    backgroundColor: "#ECF0ED",
+    backgroundColor: palette.borderSoft,
     overflow: "hidden",
     marginVertical: 9
   },
@@ -912,7 +912,7 @@ const styles = StyleSheet.create({
   },
   agentInsight: {
     borderTopWidth: 1,
-    borderTopColor: "#EEF2EF",
+    borderTopColor: palette.borderSoft,
     paddingTop: 8,
     marginTop: 8
   },
