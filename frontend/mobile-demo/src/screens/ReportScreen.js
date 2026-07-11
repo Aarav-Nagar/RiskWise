@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
 import { AgentRadar, ConfidenceRing, IntelligenceStrip, MiniLineChart, RiskBreakdownBars, ScenarioFanChart } from "../components/InsightVisuals";
 import { Pill } from "../components/Pill";
-import { Header, MissingDataNote, numberOrNull, PrimaryButton, SecondaryButton, ScreenScroll, sharedText } from "../components/Shared";
+import { Header, MissingDataNote, money, numberOrNull, PrimaryButton, SecondaryButton, ScreenScroll, sharedText } from "../components/Shared";
 import { getOptionsContext } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -297,7 +297,7 @@ function ContractLabel({ label }) {
     <View style={styles.contractLabel}>
       <LabelRow label="Max Loss" value={money(label.max_loss)} />
       <LabelRow label="Account Risk" value={`${label.account_risk_pct ?? "?"}%`} />
-      <LabelRow label="Break-even" value={label.breakeven ? `$${Number(label.breakeven).toLocaleString()}` : "Unknown"} />
+      <LabelRow label="Break-even" value={label.breakeven ? money(label.breakeven) : "Unknown"} />
       <LabelRow label="Days Left" value={label.days_left ?? "?"} />
       <LabelRow label="Required Move" value={`${label.required_move_pct ?? "?"}%`} />
       <LabelRow label="Theta Risk" value={label.theta_risk || "Unknown"} />
@@ -401,12 +401,6 @@ function MapList({ title, items, good }) {
       ))}
     </View>
   );
-}
-
-function money(value) {
-  const number = Number(value || 0);
-  const sign = number < 0 ? "-" : "";
-  return `${sign}$${Math.abs(number).toLocaleString()}`;
 }
 
 // Returns null when the underlying scores are missing; callers must render a

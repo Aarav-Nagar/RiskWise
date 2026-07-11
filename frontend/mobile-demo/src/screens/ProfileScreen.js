@@ -2,7 +2,7 @@ import React from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
-import { ScreenScroll } from "../components/Shared";
+import { deepMerge, money, ScreenScroll } from "../components/Shared";
 import { getRiskWiseContextSummary } from "../services/authService";
 import { palette } from "../theme/theme";
 
@@ -708,22 +708,6 @@ function cleanText(value, fallback) {
 
 function todayLabel() {
   return new Date().toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-}
-
-function money(value) {
-  return `$${Number(value || 0).toLocaleString()}`;
-}
-
-function deepMerge(base, patch) {
-  const result = { ...base };
-  Object.entries(patch || {}).forEach(([key, value]) => {
-    if (value && typeof value === "object" && !Array.isArray(value) && base[key] && typeof base[key] === "object" && !Array.isArray(base[key])) {
-      result[key] = { ...base[key], ...value };
-    } else {
-      result[key] = value;
-    }
-  });
-  return result;
 }
 
 function toneColor(tone) {

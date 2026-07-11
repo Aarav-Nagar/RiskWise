@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { useAuth, useClerk, useSignIn, useSignUp, useUser } from "@clerk/clerk-expo";
 import { AppShell } from "./components/AppShell";
 import { Card } from "./components/Card";
-import { PrimaryButton, sharedText } from "./components/Shared";
+import { deepMerge, PrimaryButton, sharedText } from "./components/Shared";
 import { tradeDraft } from "./data/mockData";
 import { AuthScreen } from "./screens/AuthScreen";
 import { CheckScreen } from "./screens/CheckScreen";
@@ -878,18 +878,6 @@ function isPreviewUser(user) {
 
 function hasClerkRuntime() {
   return Boolean(process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY);
-}
-
-function deepMerge(base, patch) {
-  const result = { ...base };
-  Object.entries(patch || {}).forEach(([key, value]) => {
-    if (value && typeof value === "object" && !Array.isArray(value) && base?.[key] && typeof base[key] === "object" && !Array.isArray(base[key])) {
-      result[key] = { ...base[key], ...value };
-    } else {
-      result[key] = value;
-    }
-  });
-  return result;
 }
 
 function OnboardingNotice({ onDismiss }) {

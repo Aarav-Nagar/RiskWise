@@ -199,7 +199,21 @@ export function ErrorCard({ title = "RiskWise needs attention", message }) {
 }
 
 export function money(value) {
-  return `$${Number(value || 0).toLocaleString()}`;
+  const number = Number(value || 0);
+  const sign = number < 0 ? "-" : "";
+  return `${sign}$${Math.abs(number).toLocaleString()}`;
+}
+
+export function deepMerge(base, patch) {
+  const result = { ...base };
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value && typeof value === "object" && !Array.isArray(value) && base?.[key] && typeof base[key] === "object" && !Array.isArray(base[key])) {
+      result[key] = { ...base[key], ...value };
+    } else {
+      result[key] = value;
+    }
+  });
+  return result;
 }
 
 // Missing report values must read as missing, never as demo numbers.
