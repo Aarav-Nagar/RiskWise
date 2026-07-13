@@ -11,8 +11,9 @@ import { HomeScreen } from "./screens/HomeScreen";
 import { ProfileScreen } from "./screens/ProfileScreen";
 import { ReportScreen } from "./screens/ReportScreen";
 import { ChatScreen } from "./screens/ChatScreen";
-import { clearRiskWiseContext, configureAuthService, deleteRiskWiseAccount, lookupProfileByEmail, requestPasswordReset, syncClerkProfile, updateProfileSettings } from "./services/authService";
-import { configureApiAuth, generateTradeCheck, listSavedChecks, saveCheck } from "./services/apiClient";
+import { clearRiskWiseContext, deleteRiskWiseAccount, lookupProfileByEmail, requestPasswordReset, syncClerkProfile, updateProfileSettings } from "./services/authService";
+import { generateTradeCheck, listSavedChecks, saveCheck } from "./services/apiClient";
+import { configureAuth } from "./services/httpClient";
 import { palette } from "./theme/theme";
 
 export default function App() {
@@ -46,8 +47,7 @@ function ClerkApp() {
   const [pendingPasswordReset, setPendingPasswordReset] = useState(null);
 
   useEffect(() => {
-    configureApiAuth({ getToken });
-    configureAuthService({ getToken });
+    configureAuth({ getToken });
   }, [getToken]);
 
   useEffect(() => {

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import secrets
 from datetime import datetime, timezone
 from typing import Any
 
+import sentry_sdk
+
 from ..settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 def utc_now() -> str:
@@ -296,6 +301,13 @@ class DemoStore:
         return item
 
     def status(self) -> dict[str, Any]:
+        if self.provider == "demo-fallback":
+            return {
+                "provider": self.provider,
+                "ready": False,
+                "database": "memory",
+                "message": "mongo_connection_failed_using_memory_fallback",
+            }
         return {"provider": self.provider, "ready": True, "database": "memory"}
 
 
@@ -676,7 +688,11 @@ def build_store() -> DemoStore:
         try:
             return MongoStore()
         except Exception as exc:
-            print(f"MongoDB storage unavailable; using demo store for this run. Reason: {exc}")
+            logger.error("MongoDB storage unavailable; falling back to in-memory demo store. Reason: %s", exc)
+            sentry_sdk.capture_message(
+                f"MongoDB storage unavailable at startup, falling back to in-memory demo store: {exc}",
+                level="error",
+            )
             fallback = DemoStore()
             fallback.provider = "demo-fallback"
             return fallback

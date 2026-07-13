@@ -1,10 +1,5 @@
 import { API_BASE_URL } from "./config";
-
-let authTokenProvider = null;
-
-export function configureApiAuth({ getToken } = {}) {
-  authTokenProvider = typeof getToken === "function" ? getToken : null;
-}
+import { buildHeaders, formatApiError } from "./httpClient";
 
 export async function generateTradeCheck(draft, user) {
   const data = await postJson("/trade-check", {
@@ -229,7 +224,7 @@ async function postJson(path, body, user) {
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
       method: "POST",
-      headers: await buildHeaders(user),
+      headers: await buildHeaders({ userId: user?.id, clerkId: user?.clerkId }),
       body: JSON.stringify(body)
     });
   } catch (err) {
@@ -245,7 +240,9 @@ async function postJson(path, body, user) {
 async function getJson(path, user) {
   let response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`, { headers: await buildHeaders(user) });
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      headers: await buildHeaders({ userId: user?.id, clerkId: user?.clerkId })
+    });
   } catch (err) {
     throw new Error(networkErrorMessage(path));
   }
@@ -268,32 +265,6 @@ function networkErrorMessage(path) {
     return `RiskWiseAI is offline because the backend is not reachable at ${target}.`;
   }
   return `RiskWise backend is not reachable at ${target}.`;
-}
-
-async function buildHeaders(user) {
-  const headers = { "Content-Type": "application/json" };
-  if (user?.id) {
-    headers["X-RiskWise-User-ID"] = user.id;
-  }
-  if (user?.clerkId) {
-    headers["X-Clerk-User-ID"] = user.clerkId;
-  }
-  const token = await readClerkToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
-}
-
-async function readClerkToken() {
-  if (!authTokenProvider) {
-    return "";
-  }
-  try {
-    return (await authTokenProvider()) || "";
-  } catch (err) {
-    return "";
-  }
 }
 
 function nullableNumber(value) {
@@ -432,13 +403,4 @@ function cleanText(value) {
 function nullableSignedNumber(value) {
   const number = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
   return Number.isFinite(number) ? number : null;
-}
-
-function formatApiError(data, response, fallback) {
-  const requestId = data.request_id || response.headers?.get?.("X-Request-ID");
-  const detail = data.detail || fallback;
-  if (requestId) {
-    return `${detail} (${requestId})`;
-  }
-  return detail;
 }

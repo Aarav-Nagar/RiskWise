@@ -1,10 +1,5 @@
 import { API_BASE_URL } from "./config";
-
-let authTokenProvider = null;
-
-export function configureAuthService({ getToken } = {}) {
-  authTokenProvider = typeof getToken === "function" ? getToken : null;
-}
+import { buildHeaders, formatApiError } from "./httpClient";
 
 export async function restoreSession() {
   return null;
@@ -38,7 +33,7 @@ export async function syncClerkProfile({ clerkId, email, name, profile = {} }) {
 
 export async function lookupProfileByEmail(email) {
   const response = await safeFetch(`${API_BASE_URL}/auth/profile-by-email?email=${encodeURIComponent(email)}`, {
-    headers: await buildHeaders()
+    headers: await buildHeaders({})
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -54,7 +49,7 @@ export async function requestPasswordReset({ email }) {
 export async function updateProfileSettings(userId, updates) {
   const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/profile`, {
     method: "PATCH",
-    headers: await buildHeaders(userId),
+    headers: await buildHeaders({ userId }),
     body: JSON.stringify(updates)
   });
   const data = await response.json().catch(() => ({}));
@@ -67,7 +62,7 @@ export async function updateProfileSettings(userId, updates) {
 export async function clearRiskWiseContext(userId) {
   const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context`, {
     method: "DELETE",
-    headers: await buildHeaders(userId, false)
+    headers: await buildHeaders({ userId, withJson: false })
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -78,7 +73,7 @@ export async function clearRiskWiseContext(userId) {
 
 export async function getRiskWiseContextSummary(userId) {
   const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}/context-summary`, {
-    headers: await buildHeaders(userId, false)
+    headers: await buildHeaders({ userId, withJson: false })
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -90,7 +85,7 @@ export async function getRiskWiseContextSummary(userId) {
 export async function deleteRiskWiseAccount(userId) {
   const response = await safeFetch(`${API_BASE_URL}/auth/users/${encodeURIComponent(userId)}`, {
     method: "DELETE",
-    headers: await buildHeaders(userId, false)
+    headers: await buildHeaders({ userId, withJson: false })
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -106,7 +101,7 @@ export async function signOut() {
 async function postJson(path, body) {
   const response = await safeFetch(`${API_BASE_URL}${path}`, {
     method: "POST",
-    headers: await buildHeaders(),
+    headers: await buildHeaders({}),
     body: JSON.stringify(body)
   });
   const data = await response.json().catch(() => ({}));
@@ -122,36 +117,4 @@ async function safeFetch(url, options) {
   } catch (err) {
     throw new Error("RiskWise account sync is offline. Start the backend API, or keep using preview mode while working locally.");
   }
-}
-
-async function buildHeaders(userId, withJson = true) {
-  const headers = {};
-  if (withJson) {
-    headers["Content-Type"] = "application/json";
-  }
-  if (userId) {
-    headers["X-RiskWise-User-ID"] = userId;
-  }
-  const token = await readClerkToken();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-  return headers;
-}
-
-async function readClerkToken() {
-  if (!authTokenProvider) {
-    return "";
-  }
-  try {
-    return (await authTokenProvider()) || "";
-  } catch (err) {
-    return "";
-  }
-}
-
-function formatApiError(data, response, fallback) {
-  const requestId = data.request_id || response.headers?.get?.("X-Request-ID");
-  const detail = data.detail || fallback;
-  return requestId ? `${detail} (${requestId})` : detail;
 }

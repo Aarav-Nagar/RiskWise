@@ -6,6 +6,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .settings import settings
+
+if settings.sentry_dsn:
+    sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.environment, traces_sample_rate=0.05)
+
 from .models import (
     ChatRequest,
     ChatFeedbackRequest,
@@ -44,10 +49,6 @@ from .services.llm_provider import configured_providers
 from .services.market_data import company_profile, earnings_calendar, market_provider_status, market_quote, market_search, options_chain, options_context, options_contract_context, options_expirations, stock_news
 from .services.auth import auth_config_status, require_clerk_subject, require_profile_lookup_owner, require_request_user
 from .services.store import clean_email, store
-from .settings import settings
-
-if settings.sentry_dsn:
-    sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.environment, traces_sample_rate=0.05)
 
 app = FastAPI(
     title="Options Risk Check API",
