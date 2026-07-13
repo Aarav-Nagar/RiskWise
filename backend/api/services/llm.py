@@ -2164,7 +2164,7 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
     elif re.search(r"\bPUT\b", upper):
         side = "Put"
     strike = parse_attachment_number(text, ["strike", "strk"])
-    premium = parse_attachment_number(text, ["premium", "mid", "debit", "paid", "cost"])
+    premium = parse_attachment_number(text, ["premium", "mid", "mark", "debit", "paid", "cost"])
     if premium is None:
         premium_match = re.search(r"(?:PREMIUM|MID|DEBIT|COST|PAID)\D{0,12}([0-9]+(?:\.[0-9]+)?)", upper)
         premium = attachment_number_from_value(premium_match.group(1)) if premium_match else None
@@ -2481,6 +2481,9 @@ def parse_attachment_number(text: str, labels: list[str]) -> float | None:
             return attachment_number_from_value(match.group(1))
     if labels[0] in {"strike", "strk"}:
         match = re.search(rf"\b(?:CALL|PUT)\s+\$?\s*({ATTACHMENT_NUMBER_RE})", text, re.IGNORECASE)
+        if match:
+            return attachment_number_from_value(match.group(1))
+        match = re.search(rf"\b[A-Z]{{1,5}}\s+\$?\s*({ATTACHMENT_NUMBER_RE})\s+(?:CALL|PUT)\b", text, re.IGNORECASE)
         if match:
             return attachment_number_from_value(match.group(1))
     return None
