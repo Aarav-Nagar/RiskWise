@@ -804,6 +804,44 @@ def test_image_upload_with_hosted_vision_result_returns_confirmable_fields(monke
     assert "bid" in response["missing_live_fields"]
 
 
+def test_vision_extraction_accepts_side_aliases_but_drops_invalid_numbers(monkeypatch) -> None:
+    from api.services import llm as llm_service
+    from api.services.llm_provider import LLMResult
+
+    async def fake_generate_answer(**kwargs):
+        return LLMResult(
+            text='{"ticker":"MSFT","side":"C","strike":430,"expiration":"2099-01-17","premium":-5.20,"contracts":0,"bid":-1,"ask":5.4}',
+            provider="gemini",
+            model="gemini-vision-test",
+        )
+
+    monkeypatch.setattr(llm_service, "generate_answer", fake_generate_answer)
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "broker-screenshot.png",
+                    "type": "image/png",
+                    "source": "photo-library",
+                    "dataUrl": "data:image/png;base64,iVBORw0KGgo=",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "430"
+    assert fields["ask"] == "5.4"
+    assert "premium" not in fields
+    assert "contracts" not in fields
+    assert "bid" not in fields
+    assert "premium" in response["missing_fields"]
+    assert "contracts" in response["missing_fields"]
+    assert "bid" in response["missing_live_fields"]
+
+
 def test_fact_tools_derive_max_loss_dte_and_liquidity_without_guessing_live_data() -> None:
     report = {
         "ticker": "MSFT",

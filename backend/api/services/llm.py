@@ -2400,10 +2400,10 @@ def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
         return {}
     side = data.get("side") or data.get("optionSide") or data.get("option_side")
     normalized_side = str(side).strip().lower() if side else ""
-    if "call" in normalized_side:
+    if normalized_side in {"c", "call", "calls"}:
         option_side = "call"
         trade_type = "Call Option (Long)"
-    elif "put" in normalized_side:
+    elif normalized_side in {"p", "put", "puts"}:
         option_side = "put"
         trade_type = "Put Option (Long)"
     else:
@@ -2413,16 +2413,24 @@ def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
         "ticker": clean_extracted_ticker(data.get("ticker") or data.get("symbol") or data.get("underlying")),
         "optionSide": option_side or None,
         "tradeType": trade_type or None,
-        "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice")),
+        "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice"), minimum=0, allow_zero=False),
         "expiration": normalize_extracted_expiration(data.get("expiration") or data.get("expirationDate")),
-        "premium": normalize_optional_number(data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost")),
-        "bid": normalize_optional_number(data.get("bid")),
-        "ask": normalize_optional_number(data.get("ask")),
-        "impliedVolatility": normalize_optional_number(data.get("impliedVolatility") or data.get("iv")),
-        "openInterest": normalize_optional_number(data.get("openInterest") or data.get("oi")),
-        "contractVolume": normalize_optional_number(data.get("contractVolume") or data.get("volume")),
-        "underlyingPrice": normalize_optional_number(data.get("underlyingPrice") or data.get("stockPrice")),
-        "contracts": normalize_optional_number(data.get("contracts") or data.get("quantity")),
+        "premium": normalize_optional_number(
+            data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost"),
+            minimum=0,
+            allow_zero=False,
+        ),
+        "bid": normalize_optional_number(data.get("bid"), minimum=0),
+        "ask": normalize_optional_number(data.get("ask"), minimum=0),
+        "impliedVolatility": normalize_optional_number(data.get("impliedVolatility") or data.get("iv"), minimum=0),
+        "openInterest": normalize_optional_number(data.get("openInterest") or data.get("oi"), minimum=0),
+        "contractVolume": normalize_optional_number(data.get("contractVolume") or data.get("volume"), minimum=0),
+        "underlyingPrice": normalize_optional_number(
+            data.get("underlyingPrice") or data.get("stockPrice"),
+            minimum=0,
+            allow_zero=False,
+        ),
+        "contracts": normalize_optional_number(data.get("contracts") or data.get("quantity"), minimum=1),
     }
 
 
@@ -2433,9 +2441,11 @@ def clean_extracted_ticker(value: Any) -> str | None:
     return ticker[:8]
 
 
-def normalize_optional_number(value: Any) -> str | None:
+def normalize_optional_number(value: Any, *, minimum: float | None = None, allow_zero: bool = True) -> str | None:
     number = attachment_number_from_value(value)
     if number is None:
+        return None
+    if minimum is not None and (number < minimum or (number == 0 and not allow_zero)):
         return None
     if number.is_integer():
         return str(int(number))
