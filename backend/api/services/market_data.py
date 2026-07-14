@@ -1078,6 +1078,13 @@ def clean_text(value: str) -> str:
             text = text.encode("latin1").decode("utf-8")
         except (UnicodeEncodeError, UnicodeDecodeError):
             pass
+    if any(marker in text for marker in (chr(0x00E2), chr(0x00C2), chr(0x00C3))):
+        for encoding in ("cp1252", "latin1"):
+            try:
+                text = text.encode(encoding).decode("utf-8")
+                break
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
     replacements = {
         "\u2019": "'",
         "\u2018": "'",
