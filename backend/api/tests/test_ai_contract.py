@@ -673,6 +673,33 @@ def test_contract_parser_handles_dollar_strike_month_date_and_signed_quantity() 
     assert fields["contractVolume"] == "456"
 
 
+def test_contract_parser_handles_date_first_broker_rows_with_day_month_expiration() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "statement-row.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL 15 JAN 27 200 CALL Mark 2.15 Qty 1 Bid 2.10 Ask 2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2027-01-15"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "expiration" not in response["missing_fields"]
+
+
 def test_contract_parser_handles_ocr_row_with_strike_before_side_and_mark_price() -> None:
     response = asyncio.run(
         extract_contract_from_uploads(

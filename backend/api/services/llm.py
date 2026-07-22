@@ -12,7 +12,7 @@ from .llm_provider import configured_providers, generate_answer
 SAFETY_LINE = "Educational only. Not financial advice."
 ATTACHMENT_NUMBER_RE = r"[+-]?[0-9]+(?:\.[0-9]+)?"
 ATTACHMENT_MONTH_RE = r"(?:JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|SEP(?:TEMBER)?|SEPT|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?)\.?"
-ATTACHMENT_DATE_RE = rf"(?:\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?|{ATTACHMENT_MONTH_RE}\s+\d{{1,2}},?\s*(?:\d{{2,4}})?)"
+ATTACHMENT_DATE_RE = rf"(?:\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?|{ATTACHMENT_MONTH_RE}\s+\d{{1,2}},?\s*(?:\d{{2,4}})?|\d{{1,2}}\s+{ATTACHMENT_MONTH_RE}\s*(?:\d{{2,4}})?)"
 
 SYSTEM_PROMPT = """
 You are RiskWiseAI, a calm options-risk coach for students and self-directed learners.
@@ -2214,17 +2214,17 @@ def parse_contract_shorthand(text: str) -> dict[str, Any]:
             "expiration": normalize_shorthand_expiration(f"20{compact.group(2)}-{compact.group(3)}-{compact.group(4)}"),
         }
     patterns = [
-        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b",
-        rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b",
-        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s+(CALL|PUT)\s+({ATTACHMENT_DATE_RE})\b",
+        (rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b", False),
+        (rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b", True),
+        (rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s+(CALL|PUT)\s+({ATTACHMENT_DATE_RE})\b", False),
     ]
-    for pattern in patterns:
+    for pattern, date_first in patterns:
         match = re.search(pattern, text.upper())
         if not match:
             continue
         groups = match.groups()
         ticker = groups[0]
-        if "/" in groups[1] or "-" in groups[1]:
+        if date_first:
             expiration = groups[1]
             strike = groups[2]
             side_raw = groups[3]
@@ -2279,12 +2279,18 @@ def normalize_shorthand_expiration(value: str) -> str:
 
     month_match = re.match(rf"({ATTACHMENT_MONTH_RE})\s+(\d{{1,2}}),?\s*(\d{{2,4}})?$", text, re.IGNORECASE)
     if not month_match:
-        return text
-    month = parse_month_number(month_match.group(1))
+        day_month_match = re.match(rf"(\d{{1,2}})\s+({ATTACHMENT_MONTH_RE})\s*(\d{{2,4}})?$", text, re.IGNORECASE)
+        if not day_month_match:
+            return text
+        day = int(day_month_match.group(1))
+        month = parse_month_number(day_month_match.group(2))
+        raw_year = day_month_match.group(3)
+    else:
+        month = parse_month_number(month_match.group(1))
+        day = int(month_match.group(2))
+        raw_year = month_match.group(3)
     if not month:
         return text
-    day = int(month_match.group(2))
-    raw_year = month_match.group(3)
     year = int(raw_year) if raw_year else date.today().year
     if year < 100:
         year += 2000
