@@ -12,7 +12,7 @@ from .llm_provider import configured_providers, generate_answer
 SAFETY_LINE = "Educational only. Not financial advice."
 ATTACHMENT_NUMBER_RE = r"[+-]?[0-9]+(?:\.[0-9]+)?"
 ATTACHMENT_MONTH_RE = r"(?:JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|SEP(?:TEMBER)?|SEPT|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?)\.?"
-ATTACHMENT_DATE_RE = rf"(?:\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?|{ATTACHMENT_MONTH_RE}\s+\d{{1,2}},?\s*(?:\d{{2,4}})?)"
+ATTACHMENT_DATE_RE = rf"(?:\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?|{ATTACHMENT_MONTH_RE}\s+\d{{1,2}},?\s*(?:\d{{2,4}})?|\d{{1,2}}\s+{ATTACHMENT_MONTH_RE}\s*(?:\d{{2,4}})?)"
 
 SYSTEM_PROMPT = """
 You are RiskWiseAI, a calm options-risk coach for students and self-directed learners.
@@ -2196,7 +2196,7 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
 
 
 def parse_contract_shorthand(text: str) -> dict[str, Any]:
-    compact = re.search(r"\b([A-Z]{1,5})(\d{2})(\d{2})(\d{2})([CP])(\d{8})\b", text.upper())
+    compact = re.search(r"\b([A-Z]{1,6})\s*(\d{2})(\d{2})(\d{2})([CP])(\d{8})\b", text.upper())
     if compact:
         strike = int(compact.group(6)) / 1000
         return {
@@ -2214,17 +2214,17 @@ def parse_contract_shorthand(text: str) -> dict[str, Any]:
             "expiration": normalize_shorthand_expiration(f"20{compact.group(2)}-{compact.group(3)}-{compact.group(4)}"),
         }
     patterns = [
-        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b",
-        rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b",
-        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s+(CALL|PUT)\s+({ATTACHMENT_DATE_RE})\b",
+        (rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b", False),
+        (rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b", True),
+        (rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s+(CALL|PUT)\s+({ATTACHMENT_DATE_RE})\b", False),
     ]
-    for pattern in patterns:
+    for pattern, date_first in patterns:
         match = re.search(pattern, text.upper())
         if not match:
             continue
         groups = match.groups()
         ticker = groups[0]
-        if "/" in groups[1] or "-" in groups[1]:
+        if date_first:
             expiration = groups[1]
             strike = groups[2]
             side_raw = groups[3]
@@ -2279,12 +2279,18 @@ def normalize_shorthand_expiration(value: str) -> str:
 
     month_match = re.match(rf"({ATTACHMENT_MONTH_RE})\s+(\d{{1,2}}),?\s*(\d{{2,4}})?$", text, re.IGNORECASE)
     if not month_match:
-        return text
-    month = parse_month_number(month_match.group(1))
+        day_month_match = re.match(rf"(\d{{1,2}})\s+({ATTACHMENT_MONTH_RE})\s*(\d{{2,4}})?$", text, re.IGNORECASE)
+        if not day_month_match:
+            return text
+        day = int(day_month_match.group(1))
+        month = parse_month_number(day_month_match.group(2))
+        raw_year = day_month_match.group(3)
+    else:
+        month = parse_month_number(month_match.group(1))
+        day = int(month_match.group(2))
+        raw_year = month_match.group(3)
     if not month:
         return text
-    day = int(month_match.group(2))
-    raw_year = month_match.group(3)
     year = int(raw_year) if raw_year else date.today().year
     if year < 100:
         year += 2000
@@ -2400,10 +2406,10 @@ def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
         return {}
     side = data.get("side") or data.get("optionSide") or data.get("option_side")
     normalized_side = str(side).strip().lower() if side else ""
-    if "call" in normalized_side:
+    if normalized_side in {"c", "call", "calls"}:
         option_side = "call"
         trade_type = "Call Option (Long)"
-    elif "put" in normalized_side:
+    elif normalized_side in {"p", "put", "puts"}:
         option_side = "put"
         trade_type = "Put Option (Long)"
     else:
@@ -2413,16 +2419,24 @@ def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
         "ticker": clean_extracted_ticker(data.get("ticker") or data.get("symbol") or data.get("underlying")),
         "optionSide": option_side or None,
         "tradeType": trade_type or None,
-        "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice")),
+        "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice"), minimum=0, allow_zero=False),
         "expiration": normalize_extracted_expiration(data.get("expiration") or data.get("expirationDate")),
-        "premium": normalize_optional_number(data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost")),
-        "bid": normalize_optional_number(data.get("bid")),
-        "ask": normalize_optional_number(data.get("ask")),
-        "impliedVolatility": normalize_optional_number(data.get("impliedVolatility") or data.get("iv")),
-        "openInterest": normalize_optional_number(data.get("openInterest") or data.get("oi")),
-        "contractVolume": normalize_optional_number(data.get("contractVolume") or data.get("volume")),
-        "underlyingPrice": normalize_optional_number(data.get("underlyingPrice") or data.get("stockPrice")),
-        "contracts": normalize_optional_number(data.get("contracts") or data.get("quantity")),
+        "premium": normalize_optional_number(
+            data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost"),
+            minimum=0,
+            allow_zero=False,
+        ),
+        "bid": normalize_optional_number(data.get("bid"), minimum=0),
+        "ask": normalize_optional_number(data.get("ask"), minimum=0),
+        "impliedVolatility": normalize_optional_number(data.get("impliedVolatility") or data.get("iv"), minimum=0),
+        "openInterest": normalize_optional_number(data.get("openInterest") or data.get("oi"), minimum=0),
+        "contractVolume": normalize_optional_number(data.get("contractVolume") or data.get("volume"), minimum=0),
+        "underlyingPrice": normalize_optional_number(
+            data.get("underlyingPrice") or data.get("stockPrice"),
+            minimum=0,
+            allow_zero=False,
+        ),
+        "contracts": normalize_optional_number(data.get("contracts") or data.get("quantity"), minimum=1),
     }
 
 
@@ -2433,9 +2447,11 @@ def clean_extracted_ticker(value: Any) -> str | None:
     return ticker[:8]
 
 
-def normalize_optional_number(value: Any) -> str | None:
+def normalize_optional_number(value: Any, *, minimum: float | None = None, allow_zero: bool = True) -> str | None:
     number = attachment_number_from_value(value)
     if number is None:
+        return None
+    if minimum is not None and (number < minimum or (number == 0 and not allow_zero)):
         return None
     if number.is_integer():
         return str(int(number))
