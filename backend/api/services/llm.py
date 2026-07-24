@@ -2196,7 +2196,7 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
 
 
 def parse_contract_shorthand(text: str) -> dict[str, Any]:
-    compact = re.search(r"\b([A-Z]{1,5})(\d{2})(\d{2})(\d{2})([CP])(\d{8})\b", text.upper())
+    compact = re.search(r"\b([A-Z]{1,6})\s*(\d{2})(\d{2})(\d{2})([CP])(\d{8})\b", text.upper())
     if compact:
         strike = int(compact.group(6)) / 1000
         return {

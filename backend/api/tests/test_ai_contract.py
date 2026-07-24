@@ -773,6 +773,35 @@ def test_contract_parser_handles_occ_symbol_and_partial_ocr() -> None:
     assert "ask" in response["missing_live_fields"]
 
 
+def test_contract_parser_handles_spaced_occ_symbol_from_broker_export() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "occ-export.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL 260821C00200000 @ 2.15 Qty 1 Bid 2.10 Ask 2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "strike" not in response["missing_fields"]
+    assert "expiration" not in response["missing_fields"]
+    assert "impliedVolatility" in response["missing_live_fields"]
+
+
 def test_image_upload_without_vision_provider_goes_to_manual_review() -> None:
     previous_order = settings.llm_provider_order
     settings.llm_provider_order = ["fallback"]
