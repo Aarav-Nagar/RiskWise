@@ -38,8 +38,27 @@ Scope:
 - If files or screenshots are attached, use them only if readable from the provided content. If not,
   ask for the ticker, contract, premium, expiration, and account risk instead of inventing details.
 
+Numbers (most important rule):
+- When the prompt includes an "AUTHORITATIVE NUMBERS" block, those figures were computed by RiskWise's
+  deterministic risk engine. Quote them exactly. Never recompute, round differently, or estimate your own
+  max loss, breakeven, premium, DTE, or account-risk percentage. If your instinct disagrees with the block,
+  the block wins.
+- If a number the user asks about is not in that block and not otherwise provided, say it is not available
+  rather than inventing one.
+
+Quality bar (write like a top desk analyst, not a chatbot):
+- Lead with the single thing that most decides whether this trade works or fails, then support it.
+- Be specific to THIS contract and THIS account, not options in general. Reference the real ticker,
+  strike, dollars at risk, and days left.
+- Trade in tradeoffs and probabilities, not certainties. Name the strongest bear point even in a bull case.
+- Every claim should be either a quoted authoritative number, a well-known options mechanic, or a clearly
+  labeled unknown. No vibes.
+
 Safety:
 - Do not tell the user to buy, sell, hold, enter, exit, or size a live trade.
+- A long (bought) call or put is a right, never an obligation: it is never assigned and shares are never
+  "called away" from the holder. Do not raise assignment or early-exercise risk for a long option at all;
+  those apply only to short positions.
 - For debit spreads: max loss is the net debit paid; max gain is capped at spread width minus net debit.
 - Do not fabricate live option chains, IV, premiums, earnings dates, or current prices.
 - If live data is needed, say exactly what data would be needed.
@@ -135,6 +154,88 @@ async def answer_chat(
     return response
 
 
+def authoritative_facts_block(
+    current_report: dict[str, Any] | None,
+    tool_context: dict[str, Any] | None,
+) -> str:
+    """Surface the deterministic risk numbers as a crisp, imperative block at the top of the prompt.
+
+    The full tool context is already serialized as JSON later in the prompt, but models reliably
+    miss values buried in a blob (the investigation saw Qwen hallucinate premium/breakeven). Pulling
+    the numbers into a short "quote these verbatim" block is what keeps the model's prose accurate
+    while the risk math stays the single source of truth.
+    """
+    coach = (tool_context or {}).get("coach_context") or {}
+    facts = coach.get("fact_tools") or {}
+    max_loss = facts.get("max_loss") or {}
+    breakeven = facts.get("breakeven") or {}
+    dte = facts.get("dte") or {}
+    liquidity = facts.get("liquidity") or {}
+    report = current_report or {}
+
+    lines: list[str] = []
+
+    ticker = str(report.get("ticker") or coach.get("ticker") or "").upper().strip()
+    strike = coerce_float(report.get("strike"))
+    side = str(report.get("tradeType") or report.get("trade_type") or report.get("optionSide") or "").strip()
+    contract_bits = [bit for bit in [ticker, (f"${strike:g}" if strike is not None else ""), side] if bit]
+    if contract_bits:
+        lines.append(f"- Contract: {' '.join(contract_bits)}")
+
+    premium = coerce_float(max_loss.get("premium")) or coerce_float(report.get("premium"))
+    contracts = coerce_float(max_loss.get("contracts")) or coerce_float(report.get("contracts"))
+    if premium is not None:
+        per_contract = f" (${premium * 100 * (contracts or 1):,.0f} total)" if contracts else ""
+        lines.append(f"- Premium paid: ${premium:,.2f} per share{per_contract}")
+
+    if max_loss.get("status") == "ok" and max_loss.get("max_loss") is not None:
+        loss = max_loss["max_loss"]
+        pct = max_loss.get("account_risk_pct")
+        pct_txt = f" ({pct:g}% of account)" if pct is not None else ""
+        lines.append(f"- Max loss: ${loss:,.0f}{pct_txt} — this is the most that can be lost")
+
+    if breakeven.get("status") == "ok" and breakeven.get("breakeven") is not None:
+        formula = breakeven.get("formula") or ""
+        formula_txt = f" (formula: {formula})" if formula and formula != "backend risk math" else ""
+        lines.append(f"- Breakeven: ${breakeven['breakeven']:,.2f}{formula_txt}")
+
+    days = dte.get("calendar_days_left")
+    if dte.get("status") == "ok" and days is not None:
+        lines.append(f"- Time left: {days} calendar days to expiration (DTE)")
+
+    if liquidity.get("status") == "ok" and liquidity.get("label"):
+        lines.append(f"- Liquidity read: {liquidity['label'].replace('_', ' ')} (from delayed data, not a live quote)")
+
+    if not lines:
+        return ""
+
+    missing = coach.get("missing_data") or (tool_context or {}).get("missing_data") or []
+    missing_txt = ""
+    if missing:
+        missing_txt = (
+            "Live data NOT available — do not invent it: "
+            + ", ".join(str(item) for item in missing[:8])
+            + ".\n"
+        )
+
+    return (
+        "AUTHORITATIVE NUMBERS (computed by RiskWise risk math — quote exactly, never recompute):\n"
+        + "\n".join(lines)
+        + "\n"
+        + missing_txt
+        + "\n"
+    )
+
+
+def coerce_float(value: Any) -> float | None:
+    try:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_llm_prompt(
     message: str,
     mode: str,
@@ -179,7 +280,10 @@ def build_llm_prompt(
         "greeting": "Greet the user briefly and say what you can help with.",
     }.get(mode, "Answer naturally and stay inside the educational options-risk scope.")
 
+    facts_block = authoritative_facts_block(current_report, tool_context)
+
     return (
+        f"{facts_block}"
         f"Internal classification: {mode}\n"
         f"User selected mode: {chat_mode}\n"
         f"Mode instruction: {mode_instruction}\n\n"
@@ -2868,14 +2972,38 @@ def ignores_selected_trade(normalized: str, fallback_response: dict[str, Any], m
     context = fallback_response.get("normalized_context") or {}
     selected = context.get("selected_contract") or {}
     ticker = str(context.get("ticker") or selected.get("ticker") or "").lower()
-    strike = str(selected.get("strike") or "")
-    if ticker and ticker not in normalized:
-        return True
-    if strike and strike not in normalized and mode != "saved_trade_lookup":
-        return True
+    raw_strike = selected.get("strike")
+    # An answer that explicitly disclaims having the trade is the genuine "ignored" signal.
     if "do not see a trade" in normalized or "need the trade details" in normalized:
         return True
+    mentions_ticker = bool(ticker) and ticker in normalized
+    mentions_strike = answer_mentions_strike(normalized, raw_strike)
+    have_identifier = bool(ticker) or bool(str(raw_strike or "").strip())
+    # Only reject when the answer references neither the ticker nor the strike. A prior version
+    # hard-required the ticker literal AND matched the strike as an exact string, so a stored
+    # "230.0" failed against an answer that said "230" — false-rejecting on-topic answers.
+    if have_identifier and not mentions_ticker and not mentions_strike:
+        return True
     return False
+
+
+def answer_mentions_strike(normalized: str, strike: Any) -> bool:
+    """Numeric-aware strike match: a stored 230.0 (or "230.0") should match an answer that says "230"."""
+    if strike is None or str(strike).strip() == "":
+        return False
+    forms: set[str] = set()
+    try:
+        value = float(strike)
+    except (TypeError, ValueError):
+        forms.add(str(strike).strip())
+    else:
+        if value.is_integer():
+            forms.update({str(int(value)), f"{value:.1f}"})
+        else:
+            forms.add(str(value))
+            forms.add(("%f" % value).rstrip("0").rstrip("."))
+    # Bound the match so a strike of 230 is not found inside "2300" or "1230".
+    return any(re.search(rf"(?<![\d.]){re.escape(form)}(?![\d])", normalized) for form in forms if form)
 
 
 def ignores_profile_style(normalized: str, tool_context: dict[str, Any], mode: str) -> bool:
@@ -2951,10 +3079,35 @@ def gives_direct_trading_instruction(normalized: str) -> bool:
     return any(phrase in normalized for phrase in bad_phrases)
 
 
+def premium_is_known(fallback_response: dict[str, Any]) -> bool:
+    """True when a real premium was entered/computed, so quoting it is authoritative, not fabricated.
+
+    Premium is the one number in the trade builder the user types in; it is never fetched from a live
+    chain. So "the premium is $4.20" must stay allowed even while IV/bid-ask/OI are missing — otherwise
+    the fabrication guard false-rejects an on-target answer and silently forces the deterministic stub.
+    """
+    context = fallback_response.get("normalized_context") or {}
+    facts = (context.get("coach_context") or {}).get("fact_tools") or {}
+    candidates = [
+        (facts.get("max_loss") or {}).get("premium"),
+        (facts.get("breakeven") or {}).get("premium"),
+        (context.get("selected_contract") or {}).get("premium"),
+    ]
+    for value in candidates:
+        try:
+            if value not in (None, "") and float(value) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
 def fabricates_missing_live_data(normalized: str, fallback_response: dict[str, Any]) -> bool:
     missing = " ".join(str(item).lower() for item in fallback_response.get("missing_data") or [])
     if not missing:
         return False
+    # Premium is user-entered, never a live fetch: quoting a known premium is authoritative, not fabricated.
+    premium_known = premium_is_known(fallback_response)
     suspicious_claims = [
         "currently has an iv",
         "iv is currently",
@@ -2996,7 +3149,6 @@ def fabricates_missing_live_data(normalized: str, fallback_response: dict[str, A
         "right now at $",
         "current price is",
         "option chain shows",
-        "premium is $",
         "contract is cheap",
         "contract is expensive",
         "iv looks high",
@@ -3031,6 +3183,8 @@ def fabricates_missing_live_data(normalized: str, fallback_response: dict[str, A
         "skew is steep",
         "term structure is inverted",
     ]
+    if not premium_known and "premium is $" in normalized:
+        return True
     if any(claim in normalized for claim in suspicious_claims):
         return True
     if re.search(r"\b(?:iv|implied volatility)\s+(?:is|sits|stands|runs)?\s*(?:at|around|near|about|currently)?\s*\d+(?:\.\d+)?\s*%", normalized):
@@ -3043,7 +3197,8 @@ def fabricates_missing_live_data(normalized: str, fallback_response: dict[str, A
         return True
     if re.search(r"\b(?:bid|ask|mid price|mark price|last price|last trade)\s+(?:is|=|at|sits at|stands at|around|near|about|of|was)\s+\$?\d+(?:\.\d+)?", normalized):
         return True
-    if re.search(r"\b(?:premium|mark|mid|last)\s+(?:is|=|at|around|near|about|of)\s+\$?\d+(?:\.\d+)?", normalized):
+    premium_terms = "mark|mid|last" if premium_known else "premium|mark|mid|last"
+    if re.search(rf"\b(?:{premium_terms})\s+(?:is|=|at|around|near|about|of)\s+\$?\d+(?:\.\d+)?", normalized):
         return True
     if re.search(r"\b(?:current price|stock price|underlying price)\s+(?:is|=|at)\s+\$?\d+(?:\.\d+)?", normalized):
         return True
