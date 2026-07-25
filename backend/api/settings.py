@@ -67,6 +67,8 @@ class Settings:
     rate_limit_trade_check = int(os.getenv("RATE_LIMIT_TRADE_CHECK", "90"))
     rate_limit_market = int(os.getenv("RATE_LIMIT_MARKET", "180"))
     market_cache_seconds = int(os.getenv("MARKET_CACHE_SECONDS", "300"))
+    options_cache_seconds = int(os.getenv("OPTIONS_CACHE_SECONDS", "300"))
+    options_negative_cache_seconds = int(os.getenv("OPTIONS_NEGATIVE_CACHE_SECONDS", "60"))
 
 
 settings = Settings()

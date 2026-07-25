@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
 from datetime import date, datetime
@@ -2149,6 +2151,9 @@ def attachment_contract_context(attachments: list[dict[str, Any]]) -> dict[str, 
 
 
 def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    structured = extract_structured_contract_row(attachments)
+    if structured:
+        return structured
     text = " ".join(str(item.get("text") or "") for item in attachments)
     upper = text.upper()
     if not upper.strip():
@@ -2193,6 +2198,76 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
         "contracts": contracts,
         "expiration": expiration,
     }
+
+
+def extract_structured_contract_row(attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in attachments:
+        text = str(item.get("text") or "")
+        if not text.strip() or not any(delimiter in text for delimiter in [",", "\t"]):
+            continue
+        for row in iter_attachment_table_rows(text):
+            contract = contract_from_table_row(row)
+            if is_extraction_useful(normalize_extracted_contract(contract)):
+                return contract
+    return {}
+
+
+def iter_attachment_table_rows(text: str) -> list[dict[str, str]]:
+    sample = text[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
+    except csv.Error:
+        dialect = csv.excel
+    try:
+        reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+        return [{str(key or "").strip(): str(value or "").strip() for key, value in row.items()} for row in reader if row]
+    except csv.Error:
+        return []
+
+
+def contract_from_table_row(row: dict[str, str]) -> dict[str, Any]:
+    description = row_value(row, ["description", "contract", "option", "security", "instrument"])
+    combined = " ".join(value for value in row.values() if value)
+    parsed = parse_contract_shorthand(description or combined)
+    if not parsed:
+        parsed = {}
+
+    side = parsed.get("side") or row_value(row, ["side", "type", "putcall", "callput", "optiontype"])
+    if side:
+        side = "Call" if str(side).strip().upper().startswith("C") else "Put" if str(side).strip().upper().startswith("P") else side
+
+    return {
+        "ticker": parsed.get("ticker") or row_value(row, ["ticker", "symbol", "underlying", "root"]),
+        "side": side,
+        "strike": parsed.get("strike") or row_number(row, ["strike", "strikeprice", "strike_price"]),
+        "premium": parsed.get("premium") or row_number(row, ["premium", "mark", "mid", "debit", "cost", "price"]),
+        "bid": parsed.get("bid") or row_number(row, ["bid"]),
+        "ask": parsed.get("ask") or row_number(row, ["ask"]),
+        "impliedVolatility": parsed.get("impliedVolatility") or row_number(row, ["iv", "impliedvolatility", "implied_volatility"]),
+        "openInterest": parsed.get("openInterest") or row_number(row, ["oi", "openinterest", "open_interest"]),
+        "contractVolume": parsed.get("contractVolume") or row_number(row, ["vol", "volume", "contractvolume", "contract_volume"]),
+        "underlyingPrice": parsed.get("underlyingPrice") or row_number(row, ["underlyingprice", "underlying_price", "stockprice", "stock_price"]),
+        "contracts": parsed.get("contracts") or row_number(row, ["qty", "quantity", "contracts"]),
+        "expiration": parsed.get("expiration")
+        or normalize_shorthand_expiration(row_value(row, ["expiration", "expirationdate", "expiration_date", "expiry", "exp"])),
+    }
+
+
+def row_value(row: dict[str, str], aliases: list[str]) -> str | None:
+    normalized_aliases = {normalize_table_header(alias) for alias in aliases}
+    for key, value in row.items():
+        if normalize_table_header(key) in normalized_aliases and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def row_number(row: dict[str, str], aliases: list[str]) -> float | None:
+    value = row_value(row, aliases)
+    return attachment_number_from_value(value) if value is not None else None
+
+
+def normalize_table_header(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
 
 
 def parse_contract_shorthand(text: str) -> dict[str, Any]:

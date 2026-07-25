@@ -802,6 +802,34 @@ def test_contract_parser_handles_spaced_occ_symbol_from_broker_export() -> None:
     assert "impliedVolatility" in response["missing_live_fields"]
 
 
+def test_contract_parser_preserves_broker_csv_row_mark_and_quantity() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "positions.csv",
+                    "type": "text/csv",
+                    "source": "files",
+                    "text": "Description,Qty,Mark,Bid,Ask\nAAPL 08/21/2026 200.00 C,+1,2.15,2.10,2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "premium" not in response["missing_fields"]
+    assert "contracts" not in response["missing_fields"]
+
+
 def test_image_upload_without_vision_provider_goes_to_manual_review() -> None:
     previous_order = settings.llm_provider_order
     settings.llm_provider_order = ["fallback"]
