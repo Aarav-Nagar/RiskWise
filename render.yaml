@@ -14,7 +14,14 @@ services:
       - key: MONGODB_DATABASE
         value: finance_app
       - key: LLM_PROVIDER_ORDER
-        value: gemini,openai,fallback
+        value: openrouter,gemini,openai,fallback
+      - key: OPENROUTER_MODEL
+        value: nvidia/nemotron-nano-12b-v2-vl:free
+      - key: OPENROUTER_VISION_MODEL
+        value: nvidia/nemotron-nano-12b-v2-vl:free
+      # Secret set in the Render dashboard, never committed.
+      - key: OPENROUTER_API_KEY
+        sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: GEMINI_API_VERSION

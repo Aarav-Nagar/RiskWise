@@ -31,6 +31,9 @@ def configured_providers() -> list[dict[str, Any]]:
         if provider == "gemini":
             configured = bool(settings.gemini_api_key)
             model = settings.gemini_model
+        elif provider == "openrouter":
+            configured = bool(settings.openrouter_api_key)
+            model = settings.openrouter_model
         elif provider == "openai":
             configured = bool(settings.openai_api_key)
             model = settings.openai_model
@@ -94,6 +97,8 @@ async def generate_answer(
         try:
             if provider == "gemini" and settings.gemini_api_key:
                 result = await call_gemini(system_prompt, prompt, clean_attachments)
+            elif provider == "openrouter" and settings.openrouter_api_key:
+                result = await call_openrouter(system_prompt, prompt, clean_attachments)
             elif provider == "openai" and settings.openai_api_key:
                 result = await call_openai(system_prompt, prompt, clean_attachments)
             elif provider == "ollama" and settings.ollama_base_url and settings.ollama_model:
@@ -156,7 +161,7 @@ def utc_now() -> str:
 def provider_kind(provider: str) -> str:
     if provider == "ollama":
         return "local"
-    if provider in {"gemini", "openai"}:
+    if provider in {"gemini", "openai", "openrouter"}:
         return "hosted"
     if provider == "fallback":
         return "deterministic"
@@ -189,6 +194,53 @@ async def call_openai(system_prompt: str, prompt: str, attachments: list[dict[st
     )
     text = (response.output_text or "").strip()
     return LLMResult(text=text, provider="openai", model=settings.openai_model) if text else None
+
+
+async def call_openrouter(system_prompt: str, prompt: str, attachments: list[dict[str, Any]]) -> LLMResult | None:
+    # OpenRouter speaks the OpenAI Chat Completions wire format, unlike call_openai above which uses the
+    # newer Responses API. Point AsyncOpenAI at the OpenRouter base URL and use chat.completions.create.
+    default_headers: dict[str, str] = {}
+    if settings.openrouter_referer:
+        default_headers["HTTP-Referer"] = settings.openrouter_referer
+    if settings.openrouter_title:
+        default_headers["X-Title"] = settings.openrouter_title
+    client = AsyncOpenAI(
+        api_key=settings.openrouter_api_key,
+        base_url=settings.openrouter_base_url,
+        timeout=settings.llm_request_timeout_seconds,
+        default_headers=default_headers or None,
+    )
+
+    image_parts: list[dict[str, Any]] = []
+    for attachment in attachments:
+        data_url = attachment.get("dataUrl") or attachment.get("data_url")
+        mime = str(attachment.get("type") or "")
+        if data_url and mime.startswith("image/") and len(data_url) < 1_800_000:
+            image_parts.append({"type": "image_url", "image_url": {"url": data_url}})
+
+    # Send plain-string content when there are no images (the common chat case); only switch to the
+    # multi-part content format when an image is attached. The top free reasoning model is text-only,
+    # so route image requests to the vision model instead.
+    user_content: Any = prompt
+    model = settings.openrouter_model
+    if image_parts:
+        user_content = [{"type": "text", "text": prompt}, *image_parts]
+        model = settings.openrouter_vision_model or settings.openrouter_model
+
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+        temperature=settings.llm_temperature,
+        max_tokens=settings.llm_max_output_tokens,
+    )
+    choices = getattr(response, "choices", None) or []
+    text = ""
+    if choices:
+        text = str(getattr(choices[0].message, "content", "") or "").strip()
+    return LLMResult(text=text, provider="openrouter", model=model) if text else None
 
 
 async def call_gemini(system_prompt: str, prompt: str, attachments: list[dict[str, Any]]) -> LLMResult | None:

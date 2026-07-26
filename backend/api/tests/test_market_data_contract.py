@@ -49,6 +49,13 @@ def test_market_search_ranks_exact_symbol_before_company_name_noise() -> None:
     assert ranked[0]["symbol"] == "ACHR"
 
 
+def test_clean_text_repairs_common_provider_mojibake() -> None:
+    original = "Apple\u2019s services \u2014 iPhone demand\u00a0rises"
+    mojibake = original.encode("utf-8").decode("cp1252")
+
+    assert market_data.clean_text(mojibake) == "Apple's services - iPhone demand rises"
+
+
 def test_options_context_is_honest_about_missing_contract_feed() -> None:
     response = client.get("/market/options-context/AAPL")
 
