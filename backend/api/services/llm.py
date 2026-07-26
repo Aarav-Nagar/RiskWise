@@ -2288,6 +2288,27 @@ def parse_contract_shorthand(text: str) -> dict[str, Any]:
             "contracts": parse_attachment_number(text, ["qty", "quantity", "contracts"]) or parse_contract_quantity(text),
             "expiration": normalize_shorthand_expiration(f"20{compact.group(2)}-{compact.group(3)}-{compact.group(4)}"),
         }
+    platform_symbol = re.search(
+        r"(?<![A-Z0-9])\.?([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{1,5}(?:\.\d{1,3})?)\b",
+        text.upper(),
+    )
+    if platform_symbol:
+        return {
+            "ticker": platform_symbol.group(1),
+            "side": "Call" if platform_symbol.group(5) == "C" else "Put",
+            "strike": attachment_number_from_value(platform_symbol.group(6)),
+            "premium": parse_shorthand_premium(text),
+            "bid": parse_attachment_number(text, ["bid"]),
+            "ask": parse_attachment_number(text, ["ask"]),
+            "impliedVolatility": parse_attachment_number(text, ["iv", "implied volatility"]),
+            "openInterest": parse_attachment_number(text, ["oi", "open interest"]),
+            "contractVolume": parse_attachment_number(text, ["vol", "volume"]),
+            "underlyingPrice": parse_attachment_number(text, ["underlying", "stock price"]),
+            "contracts": parse_attachment_number(text, ["qty", "quantity", "contracts"]) or parse_contract_quantity(text),
+            "expiration": normalize_shorthand_expiration(
+                f"20{platform_symbol.group(2)}-{platform_symbol.group(3)}-{platform_symbol.group(4)}"
+            ),
+        }
     patterns = [
         (rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b", False),
         (rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b", True),
