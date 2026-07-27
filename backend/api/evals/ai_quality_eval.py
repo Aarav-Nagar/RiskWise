@@ -34,6 +34,8 @@ class EvalCase:
     recent_checks: list[dict[str, Any]] = field(default_factory=list)
     attachments: list[dict[str, Any]] = field(default_factory=list)
     required_tool_any: list[str] = field(default_factory=list)
+    required_numbers: list[str] = field(default_factory=list)  # ALL must appear (number fidelity)
+    forbid_markdown: bool = False  # answer must be clean plain text for the chat bubble
     notes: str = ""
 
 
@@ -472,6 +474,56 @@ CASES = [
         forbidden_any=["you should buy", "you should sell"],
         notes="Market-context prompts should trigger quote tooling when available.",
     ),
+    # --- Phase 2 quality ratchets: number fidelity, no markdown, no fabrication with data present ---
+    EvalCase(
+        id="number_fidelity_selected_trade",
+        message="How risky is this trade?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 230,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 420,
+            "riskPosture": "Elevated",
+            "weakestLink": "breakeven move",
+            "riskMath": {"max_loss": 420, "breakeven": 234.2, "required_move_to_breakeven_pct": 1.8, "calendar_days_left": 30, "account_risk_pct": 2.1},
+        },
+        required_numbers=["$420"],
+        required_any=["breakeven", "aapl"],
+        forbid_markdown=True,
+        notes="The deterministic max loss must reach the user (prose or cards); no markdown.",
+    ),
+    EvalCase(
+        id="no_markdown_concept",
+        message="Explain IV crush",
+        expected_mode="concept",
+        required_any=["iv", "implied volatility", "premium", "uncertainty"],
+        forbid_markdown=True,
+        notes="Answers render in a plain-text chat bubble — no headings, bold, backticks, or star bullets.",
+    ),
+    EvalCase(
+        id="market_context_present_no_fabrication",
+        message="What is the liquidity like on this contract?",
+        chat_mode="Review",
+        expected_mode="trade_review",
+        current_report={
+            "ticker": "AAPL",
+            "tradeType": "Call Option (Long)",
+            "strike": 230,
+            "expiration": "2026-06-21",
+            "amountAtRisk": 420,
+            "weakestLink": "breakeven move",
+            "riskMath": {"max_loss": 420, "breakeven": 234.2, "calendar_days_left": 30},
+            # Delayed snapshot present: the coach may discuss it, but must not invent unsurfaced fields.
+            "contractSnapshot": {"bid": 4.10, "ask": 4.35, "openInterest": 1800, "volume": 640, "impliedVolatility": 0.41},
+        },
+        forbidden_any=["delta is", "current price is", "last trade was", "you should sell"],
+        forbid_markdown=True,
+        notes="With a delayed snapshot present, the coach must not fabricate live/unsurfaced fields "
+        "(Greeks, live price) — validates the fabrication-guard reconciliation didn't open a hole.",
+    ),
 ]
 
 
@@ -743,6 +795,40 @@ def evaluate_response(case: EvalCase, response: dict[str, Any]) -> dict[str, Any
     if case.max_words:
         words = count_words(answer)
         checks.append({"name": "max_words", "passed": words <= case.max_words, "expected": case.max_words, "actual": words})
+
+    if case.required_numbers:
+        # A number is "faithful" if it reaches the user — in the prose OR the summary cards. The
+        # deterministic path surfaces figures on cards; the LLM path weaves them into the answer.
+        cards_text = normalize(json.dumps(response.get("summary_cards") or []))
+        haystack = normalized + " " + cards_text
+        missing_numbers = [num for num in case.required_numbers if num.lower() not in haystack]
+        checks.append(
+            {
+                "name": "required_numbers",
+                "passed": not missing_numbers,
+                "expected_all": case.required_numbers,
+                "actual_missing": missing_numbers,
+            }
+        )
+
+    if case.forbid_markdown:
+        markers = []
+        if "**" in answer or "__" in answer:
+            markers.append("bold")
+        if "`" in answer:
+            markers.append("backtick")
+        if re.search(r"(?m)^\s{0,3}#{1,6}\s+", answer):
+            markers.append("heading")
+        if re.search(r"(?m)^\s*[\*•]\s+", answer):
+            markers.append("bullet-star")
+        checks.append(
+            {
+                "name": "forbid_markdown",
+                "passed": not markers,
+                "expected": "plain text (no markdown)",
+                "actual_markers": markers,
+            }
+        )
 
     if case.required_tool_any:
         used = [str(item.get("name") or "") for item in response.get("tools_used") or []]
