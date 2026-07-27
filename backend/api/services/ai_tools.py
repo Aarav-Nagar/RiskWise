@@ -89,7 +89,10 @@ async def build_ai_tool_context(
         profile = await company_profile(ticker)
         calls.append(ToolCall("get_company_profile", {"ticker": ticker}, profile.model_dump()))
 
-    if ticker and asks_for_earnings(message):
+    # Fetch earnings whenever a contract is in play, not only when the user asks: pinning the real
+    # earnings date into the prompt is what stops the model inventing one (the coach was seen
+    # warning about "earnings after August 25" with no earnings date in context).
+    if ticker and (report_for_tools or asks_for_earnings(message)):
         earnings = await earnings_calendar(ticker)
         calls.append(ToolCall("get_earnings", {"ticker": ticker}, earnings.model_dump()))
 
@@ -665,6 +668,7 @@ def calculate_liquidity_score(report: dict[str, Any]) -> dict[str, Any]:
     ask = number_from_value(snapshot.get("ask") or report.get("ask"))
     volume = number_from_value(snapshot.get("volume") or snapshot.get("contractVolume") or report.get("contract_volume"))
     open_interest = number_from_value(snapshot.get("openInterest") or report.get("open_interest"))
+    implied_vol = number_from_value(snapshot.get("impliedVolatility") or snapshot.get("iv") or report.get("impliedVolatility"))
     missing = []
     score = 75
     width = None
@@ -713,6 +717,7 @@ def calculate_liquidity_score(report: dict[str, Any]) -> dict[str, Any]:
         "spread_width_pct": width_pct,
         "volume": volume,
         "open_interest": open_interest,
+        "implied_volatility": implied_vol,
         "missing": missing,
         "data_quality": quality_label,
         "message": "Liquidity score is estimated from bid/ask width, volume, and open interest only when those fields are present.",
