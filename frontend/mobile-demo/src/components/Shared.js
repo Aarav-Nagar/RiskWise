@@ -204,6 +204,19 @@ export function money(value) {
   return `${sign}$${Math.abs(number).toLocaleString()}`;
 }
 
+// Formats a UTC ISO8601 timestamp (e.g. delayed-data `fetched_at`) as a short client-local time.
+// Returns "" for missing/invalid input so callers can conditionally render the freshness line.
+export function formatFetchedAt(iso) {
+  if (!iso) {
+    return "";
+  }
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 export function deepMerge(base, patch) {
   const result = { ...base };
   Object.entries(patch || {}).forEach(([key, value]) => {
