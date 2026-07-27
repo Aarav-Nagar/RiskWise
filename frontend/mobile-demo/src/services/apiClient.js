@@ -41,6 +41,131 @@ export async function sendChatMessage({ user, threadId, message, currentReport, 
   }, user);
 }
 
+// Progressive-reveal coach chat. Streams the guard-approved answer from POST /chat/stream
+// (which computes + validates the full answer BEFORE emitting any token, so numbers stay
+// deterministic). Falls back to the plain /chat request whenever streaming isn't available:
+// React Native native (no readable fetch body), an absent endpoint (e.g. a backend that
+// predates /chat/stream returns 404), or any network error. Callbacks are invoked identically
+// on both paths so the consumer never has to branch.
+export async function streamChatMessage({
+  user,
+  threadId,
+  message,
+  currentReport,
+  chatMode,
+  analysisDepth = "standard",
+  attachments = [],
+  onMeta,
+  onDelta,
+  onDone
+} = {}) {
+  const body = {
+    user_id: user?.id,
+    thread_id: threadId,
+    message,
+    current_report: currentReport,
+    user_profile: user,
+    chat_mode: chatMode,
+    analysis_depth: analysisDepth,
+    attachments
+  };
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}/chat/stream`, {
+      method: "POST",
+      headers: { Accept: "text/event-stream", ...(await buildHeaders({ userId: user?.id, clerkId: user?.clerkId })) },
+      body: JSON.stringify(body)
+    });
+  } catch (err) {
+    // Never reached the endpoint (offline / DNS). Fall back to a single non-streamed answer.
+    return streamViaChat(body, user, { onMeta, onDelta, onDone });
+  }
+
+  const reader =
+    response.ok && response.body && typeof response.body.getReader === "function"
+      ? response.body.getReader()
+      : null;
+
+  // Endpoint missing (404 on a backend without /chat/stream), an error status, or a runtime
+  // that can't read the body incrementally (RN native) — replay through the plain /chat path.
+  if (!reader) {
+    return streamViaChat(body, user, { onMeta, onDelta, onDone });
+  }
+
+  // Once we are reading frames the server has already persisted the turn, so we must NOT
+  // re-issue /chat on a mid-stream error (it would double-persist). Finalize with what arrived.
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let doneSeen = false;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      let separator;
+      while ((separator = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, separator);
+        buffer = buffer.slice(separator + 2);
+        const parsed = parseSseFrame(frame);
+        if (!parsed) {
+          continue;
+        }
+        if (parsed.event === "meta") {
+          onMeta?.(parsed.data);
+        } else if (parsed.event === "delta") {
+          onDelta?.(parsed.data.text || "");
+        } else if (parsed.event === "done") {
+          doneSeen = true;
+          onDone?.(parsed.data || {});
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  if (!doneSeen) {
+    onDone?.({});
+  }
+}
+
+async function streamViaChat(body, user, { onMeta, onDelta, onDone }) {
+  const data = await postJson("/chat", body, user);
+  const { answer, ...meta } = data;
+  onMeta?.(meta);
+  if (answer) {
+    onDelta?.(answer);
+  }
+  onDone?.({ thread_id: data.thread_id });
+}
+
+// Parse one SSE frame ("event: <name>\ndata: <json>"). Returns null for keep-alives / comments.
+function parseSseFrame(frame) {
+  let event = "message";
+  const dataLines = [];
+  for (const rawLine of frame.split("\n")) {
+    const line = rawLine.replace(/\r$/, "");
+    if (!line || line.startsWith(":")) {
+      continue;
+    }
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trim());
+    }
+  }
+  if (!dataLines.length) {
+    return null;
+  }
+  try {
+    return { event, data: JSON.parse(dataLines.join("\n")) };
+  } catch (err) {
+    return null;
+  }
+}
+
 export async function extractContractFromAttachment({ user, attachments = [] }) {
   return postJson("/extract-contract", {
     user_id: user?.id,
@@ -155,6 +280,36 @@ export async function saveCheck(user, report, note = "") {
     note
   }, user);
   return { ...item, report: normalizeSavedReport(item.report) };
+}
+
+export async function fetchAlternatives({ user, report }) {
+  return postJson("/alternatives", {
+    user_id: user?.id,
+    report,
+    user_profile: user
+  }, user);
+}
+
+export async function startChallenge({ user, report, convictionPct, direction, thesisText = "" }) {
+  return postJson("/challenge/start", {
+    user_id: user?.id,
+    report,
+    conviction_pct: convictionPct,
+    direction,
+    thesis_text: thesisText,
+    user_profile: user
+  }, user);
+}
+
+export async function gradeChallenge({ user, report, session, answers, predictionLock }) {
+  return postJson("/challenge/grade", {
+    user_id: user?.id,
+    report,
+    session,
+    answers,
+    prediction_lock: predictionLock,
+    user_profile: user
+  }, user);
 }
 
 export async function getSavedCheckExport(user, savedCheckId) {
