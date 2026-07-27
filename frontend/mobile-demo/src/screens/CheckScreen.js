@@ -5,7 +5,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { Card } from "../components/Card";
-import { ErrorCard, Header, MissingDataNote, numberOrNull, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
+import { ErrorCard, formatFetchedAt, Header, MissingDataNote, numberOrNull, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
 import { extractContractFromAttachment, getMarketBundle, getOptionsChain, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -104,6 +104,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
   const [expirations, setExpirations] = useState([]);
   const [contractReferences, setContractReferences] = useState([]);
   const [contractProviderMessage, setContractProviderMessage] = useState("");
+  const [contractFetchedAt, setContractFetchedAt] = useState("");
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(parseDate(draft.expiration) || addDays(new Date(), 30)));
   const [runningProgress, setRunningProgress] = useState(0);
   const [localReport, setLocalReport] = useState(null);
@@ -181,6 +182,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
     if (!symbol || !draft.expiration) {
       setContractReferences([]);
       setContractProviderMessage("");
+      setContractFetchedAt("");
       return undefined;
     }
     let cancelled = false;
@@ -190,11 +192,13 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
         const rows = Array.isArray(chain?.contracts) ? chain.contracts : [];
         setContractReferences(rows.slice(0, 80));
         setContractProviderMessage(chain?.message || "");
+        setContractFetchedAt(chain?.fetched_at || "");
       })
       .catch(() => {
         if (!cancelled) {
           setContractReferences([]);
           setContractProviderMessage("");
+          setContractFetchedAt("");
         }
       });
     return () => {
@@ -424,6 +428,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
             validation={optionValidation}
             contractReferences={contractReferences}
             providerMessage={contractProviderMessage}
+            fetchedAt={contractFetchedAt}
             onSelectContract={(contract) => {
               if (!contract) return;
               updateDraft({
@@ -823,7 +828,8 @@ function MiniCalendar({ visibleMonth, selected, setVisibleMonth, onSelect }) {
   );
 }
 
-function ContractDetailsStep({ draft, setNumericField, validation, contractReferences = [], providerMessage = "", onSelectContract, onContinue }) {
+function ContractDetailsStep({ draft, setNumericField, validation, contractReferences = [], providerMessage = "", fetchedAt = "", onSelectContract, onContinue }) {
+  const fetchedLabel = formatFetchedAt(fetchedAt);
   const spread = isSpreadStructure(draft.structure || draft.tradeType);
   const requiredReady = !validation.strike && !validation.premium && !validation.spread && !validation.bidAsk && !validation.impliedVolatility && !validation.openInterest && !validation.contractVolume;
   const side = draft.optionSide || (draft.structure?.includes("put") ? "put" : "call");
@@ -839,6 +845,9 @@ function ContractDetailsStep({ draft, setNumericField, validation, contractRefer
             <View style={styles.flex}>
               <Text style={styles.referenceTitle}>Real contract references</Text>
               <Text style={styles.referenceSub}>Tap a strike to attach the exchange contract symbol. Premium and IV still need live quote access or manual entry.</Text>
+              {fetchedLabel ? (
+                <Text style={styles.referenceSub}>Fetched {fetchedLabel} · Yahoo data is typically delayed 15–20 min.</Text>
+              ) : null}
             </View>
             <Ionicons name="shield-checkmark-outline" size={19} color={palette.green} />
           </View>
