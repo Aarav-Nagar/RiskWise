@@ -197,13 +197,24 @@ class DemoStore:
             "createdAt": utc_now(),
         }
 
-    def save_check(self, user_id: str, trade_check_id: str | None, report: dict[str, Any], note: str = "") -> dict[str, Any]:
+    def save_check(
+        self,
+        user_id: str,
+        trade_check_id: str | None,
+        report: dict[str, Any],
+        note: str = "",
+        *,
+        prediction_lock: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        lock = normalized_prediction_lock(prediction_lock)
         item = {
             "id": make_id("saved"),
             "userId": user_id,
             "tradeCheckId": trade_check_id,
             "report": report,
             "note": note,
+            "prediction_lock": lock,
+            "resolution": initial_resolution(lock),
             "createdAt": utc_now(),
         }
         self.saved_checks_by_user.setdefault(user_id, []).insert(0, item)
@@ -217,6 +228,30 @@ class DemoStore:
             (item for item in self.saved_checks_by_user.get(user_id, []) if item.get("id") == saved_check_id),
             None,
         )
+
+    def list_pending_resolutions(self) -> list[dict[str, Any]]:
+        rows = []
+        for items in self.saved_checks_by_user.values():
+            for item in items:
+                resolution = item.get("resolution") or {}
+                if item.get("prediction_lock") and resolution.get("status") == "pending":
+                    rows.append(item)
+        return rows
+
+    def list_resolved_checks(self) -> list[dict[str, Any]]:
+        rows = []
+        for items in self.saved_checks_by_user.values():
+            for item in items:
+                if (item.get("resolution") or {}).get("status") == "resolved":
+                    rows.append(item)
+        return rows
+
+    def update_saved_check_resolution(self, user_id: str, saved_check_id: str, resolution: dict[str, Any]) -> dict[str, Any] | None:
+        item = self.get_saved_check(user_id, saved_check_id)
+        if not item:
+            return None
+        item["resolution"] = resolution
+        return item
 
     def save_upload(self, user_id: str, source: str, attachments: list[dict[str, Any]], result: dict[str, Any] | None = None) -> dict[str, Any]:
         item = {
@@ -341,6 +376,7 @@ class MongoStore(DemoStore):
         self.db.chat_messages.create_index([("userId", 1), ("createdAt", -1)])
         self.db.saved_checks.create_index([("userId", 1), ("createdAt", -1)])
         self.db.saved_checks.create_index([("userId", 1), ("tradeCheckId", 1)])
+        self.db.saved_checks.create_index([("resolution.status", 1), ("prediction_lock.expiration", 1)])
         self.db.trade_checks.create_index([("userId", 1), ("createdAt", -1)])
         self.db.trade_checks.create_index("id", unique=True)
         self.db.chat_feedback.create_index([("userId", 1), ("createdAt", -1)])
@@ -498,13 +534,24 @@ class MongoStore(DemoStore):
             {"id": response["id"], "userId": user_id, "request": request, "response": response, "createdAt": utc_now()}
         )
 
-    def save_check(self, user_id: str, trade_check_id: str | None, report: dict[str, Any], note: str = "") -> dict[str, Any]:
+    def save_check(
+        self,
+        user_id: str,
+        trade_check_id: str | None,
+        report: dict[str, Any],
+        note: str = "",
+        *,
+        prediction_lock: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        lock = normalized_prediction_lock(prediction_lock)
         item = {
             "id": make_id("saved"),
             "userId": user_id,
             "tradeCheckId": trade_check_id,
             "report": report,
             "note": note,
+            "prediction_lock": lock,
+            "resolution": initial_resolution(lock),
             "createdAt": utc_now(),
         }
         self.db.saved_checks.insert_one(item)
@@ -516,6 +563,24 @@ class MongoStore(DemoStore):
 
     def get_saved_check(self, user_id: str, saved_check_id: str) -> dict[str, Any] | None:
         row = self.db.saved_checks.find_one({"id": saved_check_id, "userId": user_id})
+        return public_document(row) if row else None
+
+    def list_pending_resolutions(self) -> list[dict[str, Any]]:
+        rows = self.db.saved_checks.find({"resolution.status": "pending", "prediction_lock": {"$ne": None}})
+        return [public_document(row) for row in rows]
+
+    def list_resolved_checks(self) -> list[dict[str, Any]]:
+        rows = self.db.saved_checks.find({"resolution.status": "resolved"})
+        return [public_document(row) for row in rows]
+
+    def update_saved_check_resolution(self, user_id: str, saved_check_id: str, resolution: dict[str, Any]) -> dict[str, Any] | None:
+        from pymongo import ReturnDocument
+
+        row = self.db.saved_checks.find_one_and_update(
+            {"id": saved_check_id, "userId": user_id},
+            {"$set": {"resolution": resolution}},
+            return_document=ReturnDocument.AFTER,
+        )
         return public_document(row) if row else None
 
     def save_upload(self, user_id: str, source: str, attachments: list[dict[str, Any]], result: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -612,6 +677,27 @@ class MongoStore(DemoStore):
             ready = False
             message = exc.__class__.__name__
         return {"provider": self.provider, "ready": ready, "database": settings.mongodb_database, "message": message}
+
+
+def normalized_prediction_lock(prediction_lock: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not prediction_lock:
+        return None
+    lock = dict(prediction_lock)
+    if not lock.get("locked_at"):
+        lock["locked_at"] = utc_now()
+    return lock
+
+
+def initial_resolution(prediction_lock: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not prediction_lock:
+        return None
+    return {
+        "status": "pending",
+        "underlying_at_expiry": None,
+        "touched_breakeven": None,
+        "hit": None,
+        "resolved_at": None,
+    }
 
 
 def public_user(record: dict[str, Any]) -> dict[str, Any]:
