@@ -700,6 +700,33 @@ def test_contract_parser_handles_date_first_broker_rows_with_day_month_expiratio
     assert "expiration" not in response["missing_fields"]
 
 
+def test_contract_parser_handles_compact_broker_month_code_rows() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "ibkr-position.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL 21AUG26 200 C @ 2.15 Qty 1 Bid 2.10 Ask 2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "expiration" not in response["missing_fields"]
+
+
 def test_contract_parser_handles_ocr_row_with_strike_before_side_and_mark_price() -> None:
     response = asyncio.run(
         extract_contract_from_uploads(
