@@ -49,7 +49,10 @@ Numbers (most important rule):
 Quality bar (write like a top desk analyst, not a chatbot):
 - Lead with the single thing that most decides whether this trade works or fails, then support it.
 - Be specific to THIS contract and THIS account, not options in general. Reference the real ticker,
-  strike, dollars at risk, and days left.
+  strike, dollars at risk, and days left. When the AUTHORITATIVE NUMBERS block gives implied
+  volatility, bid/ask width, liquidity depth, or the next earnings date, weave the relevant ones into
+  your read (e.g. rich IV into an event, a wide spread that hurts exits) instead of teaching the
+  concept in the abstract. Never state an earnings date, IV, or bid/ask that is not in that block.
 - Trade in tradeoffs and probabilities, not certainties. Name the strongest bear point even in a bull case.
 - Every claim should be either a quoted authoritative number, a well-known options mechanic, or a clearly
   labeled unknown. No vibes.
@@ -206,6 +209,38 @@ def authoritative_facts_block(
     if liquidity.get("status") == "ok" and liquidity.get("label"):
         lines.append(f"- Liquidity read: {liquidity['label'].replace('_', ' ')} (from delayed data, not a live quote)")
 
+    # Real (delayed) market context so the coach can be specific to THIS contract instead of teaching
+    # textbook mechanics — and so it never has to invent an IV, a spread, or an earnings date. Every
+    # line is labeled delayed/estimated; absent fields are simply omitted, never guessed.
+    snapshot = report.get("contractSnapshot") or report.get("contract_snapshot") or {}
+    iv = coerce_float(liquidity.get("implied_volatility")) or coerce_float(
+        snapshot.get("impliedVolatility") or snapshot.get("iv") or report.get("impliedVolatility")
+    )
+    if iv is not None:
+        iv_pct = iv * 100 if iv < 5 else iv  # yfinance IV arrives as a fraction (0.42) or percent (42)
+        lines.append(f"- Implied volatility: {iv_pct:.0f}% (delayed estimate, not a live quote)")
+
+    bid = coerce_float(liquidity.get("bid"))
+    ask = coerce_float(liquidity.get("ask"))
+    if bid is not None and ask is not None:
+        spread_pct = liquidity.get("spread_width_pct")
+        spread_txt = f", ~{spread_pct:g}% wide" if spread_pct is not None else ""
+        lines.append(f"- Bid/ask: ${bid:,.2f} / ${ask:,.2f}{spread_txt} (delayed, not a live quote)")
+
+    open_interest = coerce_float(liquidity.get("open_interest"))
+    volume = coerce_float(liquidity.get("volume"))
+    depth_bits = []
+    if open_interest is not None:
+        depth_bits.append(f"open interest {open_interest:,.0f}")
+    if volume is not None:
+        depth_bits.append(f"volume {volume:,.0f}")
+    if depth_bits:
+        lines.append(f"- Liquidity depth: {', '.join(depth_bits)} (delayed)")
+
+    earnings_date = nearest_earnings_date(tool_context)
+    if earnings_date:
+        lines.append(f"- Next earnings: {earnings_date} (from the earnings calendar — do not state any other date)")
+
     if not lines:
         return ""
 
@@ -225,6 +260,35 @@ def authoritative_facts_block(
         + missing_txt
         + "\n"
     )
+
+
+def nearest_earnings_date(tool_context: dict[str, Any] | None) -> str | None:
+    """Return the next earnings date (ISO) from the earnings-calendar tool, or None if unavailable.
+
+    Prefers the soonest date on or after today; falls back to the most recent past date only if no
+    future one exists. Returns None when the tool failed or has no parseable dates — the facts block
+    then omits the line entirely rather than surfacing a guess.
+    """
+    for item in (tool_context or {}).get("tool_results") or []:
+        if item.get("name") != "get_earnings":
+            continue
+        result = item.get("result") or {}
+        if result.get("status") != "ok":
+            return None
+        dates: list[date] = []
+        for row in result.get("items") or []:
+            raw = str((row or {}).get("date") or "").strip()[:10]
+            try:
+                dates.append(date.fromisoformat(raw))
+            except ValueError:
+                continue
+        if not dates:
+            return None
+        today = date.today()
+        upcoming = sorted(d for d in dates if d >= today)
+        chosen = upcoming[0] if upcoming else max(dates)
+        return chosen.isoformat()
+    return None
 
 
 def coerce_float(value: Any) -> float | None:
@@ -2862,6 +2926,12 @@ def report_title(report: dict[str, Any]) -> str:
 def clean_answer(answer: str) -> str:
     text = answer.strip()
     text = text.replace("**", "").replace("__", "")
+    # The answer renders inside a plain-text mobile chat bubble, so any surviving markdown shows as
+    # literal characters. Strip heading markers, inline code backticks, and single-* / _ emphasis
+    # (leaving bullet normalization below to convert list markers to a plain "- ").
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = text.replace("`", "")
+    text = re.sub(r"(?<!\w)[*_](?=\S)(.+?)(?<=\S)[*_](?!\w)", r"\1", text)
     text = re.sub(r"(?m)^\s*[\*\u2022]\s+", "- ", text)
     text = re.sub(r"(?m)^\s*-\s{2,}", "- ", text)
     endings = [
@@ -2939,9 +3009,28 @@ def llm_answer_rejection_reasons(
         reasons.append("direct_trading_instruction")
     if has_bad_options_math(normalized):
         reasons.append("bad_options_math")
-    if fabricates_missing_live_data(normalized, fallback_response):
+    if fabricates_missing_live_data(normalized, fallback_response, tool_context):
         reasons.append("fabricated_live_data")
+    if fabricates_earnings_date(normalized, tool_context):
+        reasons.append("fabricated_earnings_date")
     return reasons
+
+
+def fabricates_earnings_date(normalized: str, tool_context: dict[str, Any]) -> bool:
+    """Reject an answer that states a specific earnings date the tools didn't provide.
+
+    The coach was seen warning about "earnings after August 25" with no earnings date in context.
+    When the earnings calendar returns a real date we surface it in the prompt and allow the model to
+    quote it; otherwise a concrete calendar date right after the word "earnings" is a fabrication. The
+    match window is short and one-directional (earnings -> date) so a legitimate expiration-date
+    mention elsewhere in the answer is not swept up, and a trailing "%" is excluded so "earnings may
+    cut IV 25%" is not read as a May 25 date.
+    """
+    if nearest_earnings_date(tool_context):
+        return False
+    month = ATTACHMENT_MONTH_RE.lower()
+    date_token = rf"(?:{month}\s+\d{{1,2}}|\d{{1,2}}[/-]\d{{1,2}})(?!\s*%)"
+    return bool(re.search(rf"earnings\b\D{{0,20}}?{date_token}", normalized))
 
 
 def normalize_answer_text(answer: str) -> str:
@@ -3102,92 +3191,96 @@ def premium_is_known(fallback_response: dict[str, Any]) -> bool:
     return False
 
 
-def fabricates_missing_live_data(normalized: str, fallback_response: dict[str, Any]) -> bool:
+def known_market_fields(fallback_response: dict[str, Any], tool_context: dict[str, Any] | None) -> set[str]:
+    """Fields RiskWise actually surfaced (delayed) into the facts block, so quoting them is authoritative.
+
+    Mirrors ``premium_is_known``: a value the app puts in front of the model — a delayed IV, bid/ask,
+    open interest, volume, or the earnings date — is legitimate to state, and must not be counted as
+    fabrication just because there is no *live* entitlement. Values that are absent stay gated.
+    """
+    context = fallback_response.get("normalized_context") or {}
+    liquidity = ((context.get("coach_context") or {}).get("fact_tools") or {}).get("liquidity") or {}
+    tc_liquidity = ((tool_context or {}).get("coach_context") or {}).get("fact_tools") or {}
+    liquidity = tc_liquidity.get("liquidity") or liquidity
+
+    def present(value: Any) -> bool:
+        try:
+            return value is not None and str(value) != "" and float(value) == float(value)
+        except (TypeError, ValueError):
+            return False
+
+    known: set[str] = set()
+    if present(liquidity.get("implied_volatility")):
+        known.add("iv")
+    if present(liquidity.get("bid")) and present(liquidity.get("ask")):
+        known.add("bid_ask")
+    if present(liquidity.get("open_interest")):
+        known.add("open_interest")
+    if present(liquidity.get("volume")):
+        known.add("volume")
+    if nearest_earnings_date(tool_context):
+        known.add("earnings")
+    return known
+
+
+# Phrase groups tagged by the market field they assert. When RiskWise surfaced that field (see
+# known_market_fields), the group is dropped so the model can quote the value it was given.
+_FABRICATION_FIELD_PHRASES: dict[str, list[str]] = {
+    "iv": [
+        "currently has an iv", "iv is currently", "iv currently", "iv is around", "iv is near",
+        "iv is about", "implied volatility is", "implied volatility currently", "iv looks high",
+        "iv looks low", "iv percentile is", "iv rank is",
+    ],
+    "bid_ask": [
+        "bid is", "ask is", "bid sits", "ask sits", "bid/ask is", "bid/ask spread is tight",
+        "spread is tight", "bid ask is tight", "bid-ask is tight", "spread is only",
+    ],
+    "open_interest": ["open interest is", "open interest of", "oi is", "open interest looks healthy"],
+    "volume": ["volume is", "volume of", "enough volume"],
+    "earnings": [
+        "earnings are on", "earnings is on", "earnings date is", "reports earnings on",
+        "reports earnings tomorrow", "earnings are this week", "earnings are tomorrow",
+        "earnings are next week",
+    ],
+}
+
+# Phrases that stay suspicious regardless of what data is present (unsurfaced fields, live prices,
+# Greeks, and qualitative editorializing the coach should replace with the numbers it was given).
+_FABRICATION_ALWAYS_PHRASES: list[str] = [
+    "mid price is", "mark price is", "last trade was", "clean pricing",
+    "delta is", "gamma is", "theta is", "vega is", "delta around", "theta near",
+    "is trading at $", "trading at $", "currently trading at", "right now at $", "current price is",
+    "option chain shows", "contract is cheap", "contract is expensive", "liquidity is strong",
+    "liquidity looks strong", "greeks look favorable", "greeks are favorable", "chain is liquid",
+    "nearest expiration is", "chain has plenty", "option chain looks liquid", "chain looks liquid",
+    "execution should not be an issue", "fills should be fine", "good participation",
+    "option is pricing in", "market is pricing", "market expects", "expected move is",
+    "skew is steep", "term structure is inverted",
+]
+
+
+def fabricates_missing_live_data(
+    normalized: str,
+    fallback_response: dict[str, Any],
+    tool_context: dict[str, Any] | None = None,
+) -> bool:
     missing = " ".join(str(item).lower() for item in fallback_response.get("missing_data") or [])
     if not missing:
         return False
     # Premium is user-entered, never a live fetch: quoting a known premium is authoritative, not fabricated.
     premium_known = premium_is_known(fallback_response)
-    suspicious_claims = [
-        "currently has an iv",
-        "iv is currently",
-        "iv currently",
-        "iv is around",
-        "iv is near",
-        "iv is about",
-        "implied volatility is",
-        "implied volatility currently",
-        "bid is",
-        "ask is",
-        "bid sits",
-        "ask sits",
-        "bid/ask is",
-        "mid price is",
-        "last trade was",
-        "mark price is",
-        "open interest is",
-        "open interest of",
-        "volume is",
-        "volume of",
-        "oi is",
-        "delta is",
-        "gamma is",
-        "theta is",
-        "vega is",
-        "delta around",
-        "theta near",
-        "earnings are on",
-        "earnings is on",
-        "earnings date is",
-        "reports earnings on",
-        "reports earnings tomorrow",
-        "earnings are this week",
-        "earnings are tomorrow",
-        "is trading at $",
-        "trading at $",
-        "currently trading at",
-        "right now at $",
-        "current price is",
-        "option chain shows",
-        "contract is cheap",
-        "contract is expensive",
-        "iv looks high",
-        "iv looks low",
-        "liquidity is strong",
-        "liquidity looks strong",
-        "bid/ask spread is tight",
-        "open interest looks healthy",
-        "earnings are next week",
-        "greeks look favorable",
-        "greeks are favorable",
-        "chain is liquid",
-        "nearest expiration is",
-        "chain has plenty",
-        "option chain looks liquid",
-        "chain looks liquid",
-        "execution should not be an issue",
-        "fills should be fine",
-        "enough volume",
-        "good participation",
-        "clean pricing",
-        "spread is tight",
-        "bid ask is tight",
-        "bid-ask is tight",
-        "spread is only",
-        "option is pricing in",
-        "market is pricing",
-        "market expects",
-        "expected move is",
-        "iv percentile is",
-        "iv rank is",
-        "skew is steep",
-        "term structure is inverted",
-    ]
+    known = known_market_fields(fallback_response, tool_context)
+
+    active_phrases = list(_FABRICATION_ALWAYS_PHRASES)
+    for field, phrases in _FABRICATION_FIELD_PHRASES.items():
+        if field not in known:
+            active_phrases.extend(phrases)
+
     if not premium_known and "premium is $" in normalized:
         return True
-    if any(claim in normalized for claim in suspicious_claims):
+    if any(claim in normalized for claim in active_phrases):
         return True
-    if re.search(r"\b(?:iv|implied volatility)\s+(?:is|sits|stands|runs)?\s*(?:at|around|near|about|currently)?\s*\d+(?:\.\d+)?\s*%", normalized):
+    if "iv" not in known and re.search(r"\b(?:iv|implied volatility)\s+(?:is|sits|stands|runs)?\s*(?:at|around|near|about|currently)?\s*\d+(?:\.\d+)?\s*%", normalized):
         return True
     if re.search(r"\b(?:delta|gamma|theta|vega|rho)\s+(?:is|=|of|at|around|near|about)?\s*-?\d+(?:\.\d+)?", normalized):
         return True
@@ -3195,21 +3288,24 @@ def fabricates_missing_live_data(normalized: str, fallback_response: dict[str, A
         return True
     if re.search(r"\bhas\s+(?:a|an)?\s*(?:delta|gamma|theta|vega|rho)\s+(?:of|at|around|near|about)\s+-?\d+(?:\.\d+)?", normalized):
         return True
-    if re.search(r"\b(?:bid|ask|mid price|mark price|last price|last trade)\s+(?:is|=|at|sits at|stands at|around|near|about|of|was)\s+\$?\d+(?:\.\d+)?", normalized):
+    price_terms = (["bid", "ask"] if "bid_ask" not in known else []) + ["mid price", "mark price", "last price", "last trade"]
+    if re.search(rf"\b(?:{'|'.join(price_terms)})\s+(?:is|=|at|sits at|stands at|around|near|about|of|was)\s+\$?\d+(?:\.\d+)?", normalized):
         return True
     premium_terms = "mark|mid|last" if premium_known else "premium|mark|mid|last"
     if re.search(rf"\b(?:{premium_terms})\s+(?:is|=|at|around|near|about|of)\s+\$?\d+(?:\.\d+)?", normalized):
         return True
     if re.search(r"\b(?:current price|stock price|underlying price)\s+(?:is|=|at)\s+\$?\d+(?:\.\d+)?", normalized):
         return True
-    if re.search(r"\b(?:open interest|volume|oi)\s+(?:is|=|at|around|near|about|of)\s+[\d,]+", normalized):
+    oiv_terms = (["open interest", "oi"] if "open_interest" not in known else []) + (["volume"] if "volume" not in known else [])
+    if oiv_terms and re.search(rf"\b(?:{'|'.join(oiv_terms)})\s+(?:is|=|at|around|near|about|of)\s+[\d,]+", normalized):
         return True
-    if re.search(r"\b[\d,]+\s+(?:open interest|volume|oi|contracts)\b", normalized):
+    if oiv_terms and re.search(rf"\b[\d,]+\s+(?:{'|'.join(oiv_terms + ['contracts'])})\b", normalized):
         return True
-    if re.search(r"\b(?:earnings|earnings date|reports earnings)\s+(?:is|are|on|for)\s+[a-z]+\s+\d{1,2}", normalized):
-        return True
-    if re.search(r"\b(?:earnings|earnings date|reports earnings|reports)\b.*\b(?:today|tomorrow|this week|next week|monday|tuesday|wednesday|thursday|friday)\b", normalized):
-        return True
+    if "earnings" not in known:
+        if re.search(r"\b(?:earnings|earnings date|reports earnings)\s+(?:is|are|on|for)\s+[a-z]+\s+\d{1,2}", normalized):
+            return True
+        if re.search(r"\b(?:earnings|earnings date|reports earnings|reports)\b.*\b(?:today|tomorrow|this week|next week|monday|tuesday|wednesday|thursday|friday)\b", normalized):
+            return True
     return False
 
 
