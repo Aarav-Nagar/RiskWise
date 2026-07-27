@@ -82,13 +82,15 @@ export async function streamChatMessage({
     return streamViaChat(body, user, { onMeta, onDelta, onDone });
   }
 
+  const isEventStream = (response.headers.get("content-type") || "").includes("text/event-stream");
   const reader =
-    response.ok && response.body && typeof response.body.getReader === "function"
+    response.ok && isEventStream && response.body && typeof response.body.getReader === "function"
       ? response.body.getReader()
       : null;
 
-  // Endpoint missing (404 on a backend without /chat/stream), an error status, or a runtime
-  // that can't read the body incrementally (RN native) — replay through the plain /chat path.
+  // Not a live SSE stream — endpoint missing (404 on a backend without /chat/stream), an error
+  // status, a proxy/mock that answered with plain JSON, or a runtime that can't read the body
+  // incrementally (RN native). Replay through the plain /chat path so the caller still gets an answer.
   if (!reader) {
     return streamViaChat(body, user, { onMeta, onDelta, onDone });
   }
