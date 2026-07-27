@@ -19,7 +19,8 @@
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://riskwise-api.onrender.com",
         "EXPO_PUBLIC_APP_ENV": "preview",
-        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_Zml0LWZlbGluZS0yOC5jbGVyay5hY2NvdW50cy5kZXYk"
+        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_Zml0LWZlbGluZS0yOC5jbGVyay5hY2NvdW50cy5kZXYk",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       },
       "ios": {
         "simulator": false
