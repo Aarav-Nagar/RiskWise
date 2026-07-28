@@ -2201,15 +2201,28 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
 
 
 def extract_structured_contract_row(attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    best_contract: dict[str, Any] = {}
+    best_score = 0
     for item in attachments:
         text = str(item.get("text") or "")
         if not text.strip() or not any(delimiter in text for delimiter in [",", "\t"]):
             continue
         for row in iter_attachment_table_rows(text):
             contract = contract_from_table_row(row)
-            if is_extraction_useful(normalize_extracted_contract(contract)):
-                return contract
-    return {}
+            extracted = normalize_extracted_contract(contract)
+            if not is_extraction_useful(extracted):
+                continue
+            score = extracted_contract_score(extracted)
+            if score > best_score:
+                best_contract = contract
+                best_score = score
+    return best_contract
+
+
+def extracted_contract_score(extracted: dict[str, Any]) -> int:
+    required = ["ticker", "optionSide", "strike", "expiration", "premium", "contracts"]
+    live = ["bid", "ask", "impliedVolatility", "openInterest", "contractVolume", "underlyingPrice"]
+    return sum(2 for field in required if extracted.get(field)) + sum(1 for field in live if extracted.get(field))
 
 
 def iter_attachment_table_rows(text: str) -> list[dict[str, str]]:
@@ -2218,11 +2231,67 @@ def iter_attachment_table_rows(text: str) -> list[dict[str, str]]:
         dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
     except csv.Error:
         dialect = csv.excel
+    candidates = [text]
+    header_index = find_attachment_table_header_index(text, dialect)
+    if header_index > 0:
+        candidates.append("\n".join(text.splitlines()[header_index:]))
+
+    rows: list[dict[str, str]] = []
+    for candidate in candidates:
+        rows.extend(read_attachment_table_rows(candidate, dialect))
+    return rows
+
+
+def read_attachment_table_rows(text: str, dialect: csv.Dialect) -> list[dict[str, str]]:
     try:
         reader = csv.DictReader(io.StringIO(text), dialect=dialect)
         return [{str(key or "").strip(): str(value or "").strip() for key, value in row.items()} for row in reader if row]
     except csv.Error:
         return []
+
+
+def find_attachment_table_header_index(text: str, dialect: csv.Dialect) -> int:
+    descriptor_headers = {
+        "description",
+        "contract",
+        "option",
+        "security",
+        "instrument",
+        "ticker",
+        "symbol",
+        "underlying",
+        "root",
+    }
+    value_headers = {
+        "qty",
+        "quantity",
+        "contracts",
+        "strike",
+        "strikeprice",
+        "expiration",
+        "expirationdate",
+        "expiry",
+        "exp",
+        "mark",
+        "mid",
+        "premium",
+        "debit",
+        "cost",
+        "price",
+        "bid",
+        "ask",
+    }
+    for index, line in enumerate(text.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            cells = next(csv.reader([line], dialect=dialect))
+        except csv.Error:
+            cells = re.split(r"[\t,]", line)
+        headers = {normalize_table_header(cell) for cell in cells}
+        if headers & descriptor_headers and headers & value_headers:
+            return index
+    return 0
 
 
 def contract_from_table_row(row: dict[str, str]) -> dict[str, Any]:

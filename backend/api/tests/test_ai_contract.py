@@ -857,6 +857,38 @@ def test_contract_parser_preserves_broker_csv_row_mark_and_quantity() -> None:
     assert "contracts" not in response["missing_fields"]
 
 
+def test_contract_parser_skips_broker_csv_preamble_before_header() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "positions-with-preamble.csv",
+                    "type": "text/csv",
+                    "source": "files",
+                    "text": (
+                        "Account Positions Export\n"
+                        "Generated,2026-07-27\n"
+                        "\n"
+                        "Description,Qty,Mark,Bid,Ask\n"
+                        "AAPL 08/21/2026 200.00 C,+1,2.15,2.10,2.25"
+                    ),
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+
+
 def test_contract_parser_handles_thinkorswim_platform_symbol() -> None:
     response = asyncio.run(
         extract_contract_from_uploads(
