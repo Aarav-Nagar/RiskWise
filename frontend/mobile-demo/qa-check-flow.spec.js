@@ -58,6 +58,34 @@ test("option contract flow supports niche ticker search and reaches investigatio
   expect(filteredErrors(errors)).toBe("");
 });
 
+test("ticker card reports a missing quote instead of inventing a price", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+
+  await installBackendMocks(page);
+  // Registered after the shared mocks so it wins: a reachable quote outage.
+  await page.route(/\/market\/quote\//, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ symbol: "ACHR", price: null, change: null, changePercentage: null })
+    })
+  );
+
+  await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
+  await page.getByText("Check", { exact: true }).last().click();
+  await page.getByText("Option Contract", { exact: true }).click();
+  await page.getByPlaceholder("Search ticker, e.g. AAPL").fill("achr");
+  await expect(page.getByText("Archer Aviation Inc.").first()).toBeVisible({ timeout: 10000 });
+  await page.getByText("Archer Aviation Inc.").first().click();
+
+  await expect(page.getByText("Price missing")).toBeVisible();
+  await expect(page.getByText("No quote")).toBeVisible();
+  // The old fabricated fallbacks: ACHR's canned 8.26/-1.80%, and $50.00 for anything unknown.
+  await expect(page.getByText(/\$8\.26|\$50\.00|-1\.80%/)).toHaveCount(0);
+
+  expect(filteredErrors(errors)).toBe("");
+});
+
 test("option contract validation blocks impossible bid ask before review", async ({ page }) => {
   const errors = collectBrowserErrors(page);
 

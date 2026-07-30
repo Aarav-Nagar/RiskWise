@@ -5,7 +5,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { Card } from "../components/Card";
-import { ErrorCard, formatFetchedAt, Header, MissingDataNote, numberOrNull, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
+import { ErrorCard, formatFetchedAt, greeting, Header, MissingDataNote, numberOrNull, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
 import { extractContractFromAttachment, getMarketBundle, getOptionsChain, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -604,7 +604,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
 
   return (
     <ScreenScroll>
-      <Header title={`Good morning, ${draft.user}`} subtitle="Choose how much information you already have." />
+      <Header title={greeting(user)} subtitle="Choose how much information you already have." />
       <Card style={styles.snapshot}>
         <View style={styles.rowBetween}>
           <Text style={sharedText.cardLabel}>Account Snapshot</Text>
@@ -714,8 +714,8 @@ function SearchBox({ query, setQuery, results, searching, selectedTicker, onSele
 
 function TickerCard({ ticker, market }) {
   const quote = market?.quote;
-  const price = quote?.price || mockPrice(ticker.symbol);
-  const change = quote?.changePercentage ?? quote?.change_percent ?? mockChange(ticker.symbol);
+  const price = numberOrNull(quote?.price);
+  const change = numberOrNull(quote?.changePercentage ?? quote?.change_percent);
   return (
     <Card style={styles.tickerCard}>
       <View style={styles.symbolLogo}>
@@ -726,8 +726,16 @@ function TickerCard({ ticker, market }) {
         <Text style={styles.resultName}>{ticker.name}</Text>
       </View>
       <View style={styles.priceBox}>
-        <Text style={styles.priceText}>${Number(price).toFixed(2)}</Text>
-        <Text style={styles.changeText}>{Number(change) >= 0 ? "+" : ""}{Number(change).toFixed(2)}%</Text>
+        {price === null ? (
+          <Text style={styles.priceMissingText}>Price missing</Text>
+        ) : (
+          <Text style={styles.priceText}>${price.toFixed(2)}</Text>
+        )}
+        {change === null ? (
+          <Text style={styles.changeMissingText}>No quote</Text>
+        ) : (
+          <Text style={change >= 0 ? styles.changeText : styles.changeTextDown}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</Text>
+        )}
       </View>
     </Card>
   );
@@ -1933,14 +1941,6 @@ function recentName(symbol) {
   return found?.name || `${normalizeSymbol(symbol)} ticker`;
 }
 
-function mockPrice(symbol) {
-  return { AAPL: 197.02, NVDA: 113.5, SPY: 602.1, MSFT: 442.7, QQQ: 531.4, ACHR: 8.26 }[normalizeSymbol(symbol)] || 50;
-}
-
-function mockChange(symbol) {
-  return { AAPL: 0.63, NVDA: 1.1, SPY: 0.24, MSFT: 0.42, QQQ: 0.36, ACHR: -1.8 }[normalizeSymbol(symbol)] || 0.15;
-}
-
 function parseDate(value) {
   if (!value) return null;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? new Date(`${value}T00:00:00`) : new Date(value);
@@ -2188,7 +2188,10 @@ const styles = StyleSheet.create({
   bigSymbol: { color: palette.dark, fontSize: 18, fontWeight: "900" },
   priceBox: { alignItems: "flex-end" },
   priceText: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  priceMissingText: { color: palette.muted, fontSize: 11, fontWeight: "800" },
   changeText: { color: palette.green, fontSize: 10, fontWeight: "900", marginTop: 3 },
+  changeTextDown: { color: palette.red, fontSize: 10, fontWeight: "900", marginTop: 3 },
+  changeMissingText: { color: palette.muted, fontSize: 9, fontWeight: "800", marginTop: 3 },
   selectable: { minHeight: 70, borderWidth: 1, borderColor: palette.border, borderRadius: 16, backgroundColor: "#FFFFFF", padding: 13, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 },
   selectableActive: { borderColor: palette.green, backgroundColor: "#F4FFF7" },
   radio: { width: 26, height: 26, borderRadius: 13, borderWidth: 1, borderColor: palette.border, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" },

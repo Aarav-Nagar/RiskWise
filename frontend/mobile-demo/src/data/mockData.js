@@ -8,7 +8,6 @@ function defaultExpiration() {
 }
 
 export const tradeDraft = {
-  user: "Alex",
   accountSize: 25000,
   riskBudget: 1250,
   ticker: "AAPL",

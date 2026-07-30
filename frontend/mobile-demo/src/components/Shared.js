@@ -240,6 +240,20 @@ export function numberOrNull(value) {
   return Number.isFinite(number) ? number : null;
 }
 
+// The signed-in account is the only source for the user's name - never a demo default.
+export function firstName(user) {
+  const full = String(user?.name || user?.fullName || "").trim();
+  return full ? full.split(/\s+/)[0] : "";
+}
+
+// Greets by the real local hour, and omits the name entirely when we do not have one.
+export function greeting(user, now = new Date()) {
+  const hour = now.getHours();
+  const part = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const name = firstName(user);
+  return name ? `${part}, ${name}` : part;
+}
+
 export function MissingDataNote({ message = NOT_AVAILABLE }) {
   return (
     <View style={styles.missingNote}>
