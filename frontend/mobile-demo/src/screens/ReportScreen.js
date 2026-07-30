@@ -149,12 +149,16 @@ function OverviewPanel({ report, labelOpen, setLabelOpen }) {
 
       <View style={styles.panelDivider} />
       <Text style={sharedText.sectionTitle}>Questions Before Acting</Text>
-      {report.questions.map((question, index) => (
-        <View key={question} style={styles.questionRow}>
-          <Text style={styles.questionNumber}>{index + 1}</Text>
-          <Text style={styles.questionText}>{question}</Text>
-        </View>
-      ))}
+      {Array.isArray(report.questions) && report.questions.length ? (
+        report.questions.map((question, index) => (
+          <View key={question} style={styles.questionRow}>
+            <Text style={styles.questionNumber}>{index + 1}</Text>
+            <Text style={styles.questionText}>{question}</Text>
+          </View>
+        ))
+      ) : (
+        <MissingDataNote message="Questions not available - review questions were not returned for this check." />
+      )}
     </Card>
   );
 }
@@ -230,10 +234,16 @@ function AgentsPanel({ report }) {
     <Card>
       <Text style={sharedText.sectionTitle}>Review Panel</Text>
       <Text style={styles.agentPanelSub}>This is a coverage map for failure modes. Scores are checklist signals, not independent model agreement.</Text>
-      <AgentRadar agents={report.agentDocket} />
-      {report.agentDocket.map((agent) => (
-        <AgentRow key={agent.name} agent={agent} />
-      ))}
+      {Array.isArray(report.agentDocket) && report.agentDocket.length ? (
+        <>
+          <AgentRadar agents={report.agentDocket} />
+          {report.agentDocket.map((agent) => (
+            <AgentRow key={agent.name} agent={agent} />
+          ))}
+        </>
+      ) : (
+        <MissingDataNote message="Review panel not available - agent docket was not returned for this check." />
+      )}
     </Card>
   );
 }

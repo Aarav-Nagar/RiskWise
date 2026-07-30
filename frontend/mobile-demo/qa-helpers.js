@@ -530,8 +530,51 @@ function buildTradeCheckResponse(body) {
   };
 }
 
+const PREVIEW_PATH = "/?riskwise_preview=1";
+
+// Shared check-flow navigation. The expects between clicks are synchronisation
+// points, not decoration - the next step's Continue does not exist yet without
+// them, so every caller must walk the flow the same way.
+async function openCheck(page, expect) {
+  await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
+  await page.getByText("Check", { exact: true }).last().click();
+  await expect(page.getByText("How would you like to check a trade?")).toBeVisible();
+}
+
+async function reachContractDetails(page, expect) {
+  await openCheck(page, expect);
+  await page.getByText("Option Contract", { exact: true }).click();
+  await expect(page.getByText("Select Ticker")).toBeVisible();
+
+  await page.getByPlaceholder("Search ticker, e.g. AAPL").fill("achr");
+  await expect(page.getByText("Archer Aviation Inc.").first()).toBeVisible({ timeout: 10000 });
+  await page.getByText("Archer Aviation Inc.").first().click();
+  await expect(page.getByText("ACHR", { exact: true }).first()).toBeVisible();
+
+  await page.getByText("Continue").click();
+  await expect(page.getByText("Choose Direction")).toBeVisible();
+  await page.getByText("Continue").click();
+  await expect(page.getByText("Select Option Type")).toBeVisible();
+  await page.getByText("Continue").click();
+  await expect(page.getByText("Expiration", { exact: true })).toBeVisible();
+  await page.getByText("Continue").click();
+  await expect(page.getByText("Contract Details")).toBeVisible();
+}
+
+async function reachFinalReview(page, expect) {
+  await reachContractDetails(page, expect);
+  await page.getByText("Continue").click();
+  await expect(page.getByText("Size & Guardrails")).toBeVisible();
+  await page.getByText("Review Final Details").click();
+  await expect(page.getByText("Final Review")).toBeVisible();
+}
+
 module.exports = {
   collectBrowserErrors,
   filteredErrors,
-  installBackendMocks
+  installBackendMocks,
+  openCheck,
+  reachContractDetails,
+  reachFinalReview,
+  PREVIEW_PATH
 };

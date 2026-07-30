@@ -10,6 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     env:
       EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ vars.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY || 'pk_test_Zml0LWZlbGluZS0yOC5jbGVyay5hY2NvdW50cy5kZXYk' }}
+      # Metro inlines this into the bundle at export time, and config.js throws
+      # at startup when it is unset - without it every Playwright spec renders a
+      # blank page. The specs mock all backend routes, so this URL is never
+      # actually called; it only has to be present and valid.
+      EXPO_PUBLIC_API_BASE_URL: https://riskwise-api.onrender.com
     defaults:
       run:
         working-directory: frontend/mobile-demo
@@ -22,7 +27,18 @@ jobs:
           cache-dependency-path: frontend/mobile-demo/package-lock.json
       - run: npm ci --omit=optional
       - run: npm run typecheck
+      - run: npm run lint
       - run: npm run export:web
+      - run: npx playwright install --with-deps chromium
+      # export:web already ran above, so drive Playwright directly rather than
+      # via qa:smoke (which would re-export).
+      - run: npx playwright test --config=playwright.config.cjs
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/mobile-demo/playwright-report
+          retention-days: 7
 
   api:
     runs-on: ubuntu-latest

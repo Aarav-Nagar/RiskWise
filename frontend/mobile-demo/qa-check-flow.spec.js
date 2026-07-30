@@ -1,45 +1,31 @@
 const { test, expect } = require("@playwright/test");
-const { collectBrowserErrors, filteredErrors, installBackendMocks } = require("./qa-helpers");
+const {
+  collectBrowserErrors,
+  filteredErrors,
+  installBackendMocks,
+  PREVIEW_PATH,
+  openCheck: openCheckFlow,
+  reachContractDetails: reachContractDetailsFlow,
+  reachFinalReview: reachFinalReviewFlow
+} = require("./qa-helpers");
 
 test.use({
   viewport: { width: 430, height: 900 }
 });
 
-const PREVIEW_PATH = "/?riskwise_preview=1";
-
 async function openCheck(page) {
   await installBackendMocks(page);
-  await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
-  await page.getByText("Check", { exact: true }).last().click();
-  await expect(page.getByText("How would you like to check a trade?")).toBeVisible();
+  await openCheckFlow(page, expect);
 }
 
 async function reachContractDetails(page) {
-  await openCheck(page);
-  await page.getByText("Option Contract", { exact: true }).click();
-  await expect(page.getByText("Select Ticker")).toBeVisible();
-
-  await page.getByPlaceholder("Search ticker, e.g. AAPL").fill("achr");
-  await expect(page.getByText("Archer Aviation Inc.").first()).toBeVisible({ timeout: 10000 });
-  await page.getByText("Archer Aviation Inc.").first().click();
-  await expect(page.getByText("ACHR", { exact: true }).first()).toBeVisible();
-
-  await page.getByText("Continue").click();
-  await expect(page.getByText("Choose Direction")).toBeVisible();
-  await page.getByText("Continue").click();
-  await expect(page.getByText("Select Option Type")).toBeVisible();
-  await page.getByText("Continue").click();
-  await expect(page.getByText("Expiration", { exact: true })).toBeVisible();
-  await page.getByText("Continue").click();
-  await expect(page.getByText("Contract Details")).toBeVisible();
+  await installBackendMocks(page);
+  await reachContractDetailsFlow(page, expect);
 }
 
 async function reachFinalReview(page) {
-  await reachContractDetails(page);
-  await page.getByText("Continue").click();
-  await expect(page.getByText("Size & Guardrails")).toBeVisible();
-  await page.getByText("Review Final Details").click();
-  await expect(page.getByText("Final Review")).toBeVisible();
+  await installBackendMocks(page);
+  await reachFinalReviewFlow(page, expect);
 }
 
 test("option contract flow supports niche ticker search and reaches investigation", async ({ page }) => {
