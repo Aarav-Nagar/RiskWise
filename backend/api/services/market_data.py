@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import socket
+import threading
 import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from importlib import import_module
 from typing import Any
 
@@ -32,9 +36,19 @@ PENDING_FIELDS = ["option_chain", "implied_volatility", "expiration_dates", "liv
 FMP_STABLE_BASE = "https://financialmodelingprep.com/stable"
 YAHOO_RSS_BASE = "https://feeds.finance.yahoo.com/rss/2.0/headline"
 ALPHA_VANTAGE_BASE = "https://www.alphavantage.co/query"
+logger = logging.getLogger(__name__)
+
 _FMP_CACHE: dict[str, tuple[float, Any]] = {}
 _POLYGON_CACHE: dict[str, tuple[float, Any]] = {}
 _YFINANCE_IMPORT_ERROR: str | None | bool = False
+
+# Delayed options chains are fetched through yfinance, which hits Yahoo on every call. These caches
+# and per-key locks turn "one network scrape per request" into "one scrape per key per TTL", and let
+# a provider outage be cached (negatively) instead of hammering an already-failing upstream.
+_OPTIONS_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
+_OPTIONS_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_OPTIONS_LOCKS_GUARD = threading.Lock()
+_DEFAULT_EXPIRATION_KEY = "__default__"
 FALLBACK_SYMBOLS = [
     {"symbol": "SPY", "name": "SPDR S&P 500 ETF Trust", "exchange": "NYSE Arca", "sector": "ETF"},
     {"symbol": "QQQ", "name": "Invesco QQQ Trust", "exchange": "NASDAQ", "sector": "ETF"},
@@ -361,16 +375,27 @@ async def options_expirations(ticker: str) -> OptionsAvailabilityResponse:
                 ),
             )
     if yfinance_enabled():
-        expirations, contracts = yfinance_option_chain(symbol, limit=30)
-        if expirations:
+        result = yfinance_option_chain(symbol, limit=30)
+        if not result.available:
+            return OptionsAvailabilityResponse(
+                ticker=symbol,
+                status="yfinance_unavailable",
+                provider="yfinance_delayed",
+                expirations=standard_monthly_expirations(),
+                quote=quote.model_dump(),
+                message=(result.message or "The delayed options provider is temporarily unavailable.")
+                + " Standard monthly expirations are shown for planning only.",
+            )
+        if result.expirations:
             return OptionsAvailabilityResponse(
                 ticker=symbol,
                 status="delayed_expirations_ready",
                 provider="yfinance_delayed",
-                expirations=expirations[:16],
-                contracts=contracts[:30],
+                expirations=result.expirations[:16],
+                contracts=result.contracts[:30],
                 quote=quote.model_dump(),
                 message="Delayed yfinance expirations are available. Treat them as delayed reference data, not live OPRA.",
+                fetched_at=result.fetched_at,
             )
     return OptionsAvailabilityResponse(
         ticker=symbol,
@@ -407,14 +432,29 @@ async def options_chain(ticker: str, expiration: str | None = None) -> OptionsAv
             ),
         )
     if yfinance_enabled():
-        expirations, contracts = yfinance_option_chain(symbol, expiration=expiration, limit=140)
-        contracts = attach_estimated_greeks(contracts, quote.price)
+        result = yfinance_option_chain(symbol, expiration=expiration, limit=140)
+        if not result.available:
+            return OptionsAvailabilityResponse(
+                ticker=symbol,
+                status="yfinance_unavailable",
+                provider="yfinance_delayed",
+                expirations=standard_monthly_expirations(),
+                contracts=[],
+                quote=quote.model_dump(),
+                profile=profile.model_dump(),
+                earnings=[item.model_dump() for item in earnings.items],
+                message=(
+                    (result.message or "The delayed options provider is temporarily unavailable.")
+                    + " Quote, profile, and earnings context are still attached for review."
+                ),
+            )
+        contracts = attach_estimated_greeks(result.contracts, quote.price)
         if contracts:
             return OptionsAvailabilityResponse(
                 ticker=symbol,
                 status="delayed_chain_ready",
                 provider="yfinance_delayed",
-                expirations=expirations[:16] if expirations else standard_monthly_expirations(),
+                expirations=result.expirations[:16] if result.expirations else standard_monthly_expirations(),
                 contracts=contracts[:140],
                 quote=quote.model_dump(),
                 profile=profile.model_dump(),
@@ -423,6 +463,7 @@ async def options_chain(ticker: str, expiration: str | None = None) -> OptionsAv
                     "RiskWise is using delayed yfinance options data for premium, bid/ask, IV, volume, and open interest where available. "
                     "Greeks are RiskWise-estimated from Black-Scholes when inputs are sufficient, not provider-reported."
                 ),
+                fetched_at=result.fetched_at,
             )
     return OptionsAvailabilityResponse(
         ticker=symbol,
@@ -452,13 +493,18 @@ async def options_contract_context(
     selected_contract: dict[str, Any] = {}
     expiration_rows: list[str] = []
     contracts: list[dict[str, Any]] = []
+    fetched_at: str | None = None
+    yfinance_unavailable = False
     if polygon_enabled():
         expiration_rows, contracts = polygon_option_reference(symbol, expiration=expiration, option_type=option_type, limit=250)
         contracts = enrich_reference_contracts(contracts, quote.price)
         selected_contract = choose_contract_reference(contracts, expiration, strike, option_type)
     elif yfinance_enabled():
-        expiration_rows, contracts = yfinance_option_chain(symbol, expiration=expiration, option_side=option_type, limit=120)
-        contracts = attach_estimated_greeks(contracts, quote.price)
+        result = yfinance_option_chain(symbol, expiration=expiration, option_side=option_type, limit=120)
+        yfinance_unavailable = not result.available
+        fetched_at = result.fetched_at
+        expiration_rows = result.expirations
+        contracts = attach_estimated_greeks(result.contracts, quote.price)
         selected_contract = choose_yfinance_contract(contracts, expiration, strike, option_type)
     selected: dict[str, Any] = {
         "symbol": symbol,
@@ -498,8 +544,12 @@ async def options_contract_context(
             "RiskWise matched the requested contract against real Massive/Polygon option-reference data, but live premium, IV, "
             "Greeks, bid/ask, volume, and open interest are not available on the current entitlement."
             if selected_contract
+            else "The delayed options provider (Yahoo/yfinance) is temporarily unavailable, so no contract could be matched right now. "
+            "RiskWise attached real stock quote/profile/earnings context for review."
+            if yfinance_unavailable
             else "RiskWise attached real stock quote/profile/earnings context, but live premium, IV, Greeks, bid/ask, volume, and open interest still require an options snapshot entitlement."
         ),
+        fetched_at=fetched_at,
     )
 
 
@@ -537,7 +587,10 @@ def market_provider_status() -> MarketProviderStatusResponse:
             status=yfinance_status,
             fields=["delayed_expirations", "delayed_chain", "bid_ask", "implied_volatility", "volume", "open_interest"],
             missing=yfinance_missing,
-            notes="No-key delayed fallback. Useful for MVP context, not live OPRA redistribution.",
+            notes=(
+                "No-key delayed fallback (cached, freshness-stamped via fetched_at). A provider outage returns an honest "
+                "'yfinance_unavailable' status instead of an empty chain. Not live OPRA data and not for redistribution."
+            ),
         ),
         MarketProviderCapability(
             provider="alpha_vantage",
@@ -606,33 +659,63 @@ def alpha_global_quote(symbol: str) -> dict[str, Any]:
     return row if isinstance(row, dict) else {}
 
 
-def yfinance_option_chain(
-    symbol: str,
-    *,
-    expiration: str | None = None,
-    option_side: str | None = None,
-    limit: int = 120,
-) -> tuple[list[str], list[dict[str, Any]]]:
-    try:
-        import yfinance as yf  # type: ignore
+@dataclass
+class YFinanceChainResult:
+    """Outcome of a delayed-options fetch. `available` distinguishes a real provider outage
+    (status="error") from a genuinely empty chain (status="ok", no contracts) so callers can
+    label an outage honestly instead of rendering it as "no options exist"."""
+
+    expirations: list[str]
+    contracts: list[dict[str, Any]]
+    status: str  # "ok" | "error"
+    fetched_at: str | None  # UTC ISO8601, set at the real fetch time; stable across cache hits
+    message: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.status == "ok"
+
+
+def _transient_error_types() -> tuple[type[BaseException], ...]:
+    """Errors worth one retry: dropped sockets / timeouts. Deliberately excludes HTTP status
+    errors (e.g. 429/5xx) — retrying a rate-limited request just deepens the throttle."""
+    types: list[type[BaseException]] = [ConnectionError, TimeoutError, socket.timeout]
+    try:  # requests exceptions don't subclass the builtins, so add them explicitly when present
+        from requests import exceptions as req_exc  # type: ignore
+
+        types.extend([req_exc.ConnectionError, req_exc.Timeout])
     except Exception:
-        return [], []
-    try:
-        ticker = yf.Ticker(symbol)
-        expirations = list(getattr(ticker, "options", []) or [])
-        if not expirations:
-            return [], []
-        selected_expiration = expiration if expiration in expirations else expirations[0]
-        chain = ticker.option_chain(selected_expiration)
-    except Exception:
-        return [], []
+        pass
+    return tuple(types)
+
+
+def _options_lock(key: tuple[str, str]) -> threading.Lock:
+    with _OPTIONS_LOCKS_GUARD:
+        lock = _OPTIONS_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _OPTIONS_LOCKS[key] = lock
+        return lock
+
+
+def _read_options_cache(key: tuple[str, str]) -> dict[str, Any] | None:
+    entry = _OPTIONS_CACHE.get(key)
+    if not entry:
+        return None
+    ttl = settings.options_cache_seconds if entry.get("status") == "ok" else settings.options_negative_cache_seconds
+    if _cache_is_fresh(entry["ts"], ttl):
+        return entry
+    return None
+
+
+def _build_yfinance_rows(symbol: str, selected_expiration: str, chain: Any) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for side_name, frame in [("call", getattr(chain, "calls", None)), ("put", getattr(chain, "puts", None))]:
-        if option_side and side_name != option_side:
-            continue
         if frame is None:
             continue
-        records = frame.head(max(1, min(limit, 500))).to_dict("records")
+        # Cache the full chain (both sides, capped) once; per-request side/limit shaping happens
+        # after the cache read, so one fetch serves every side/limit variation for this expiration.
+        records = frame.head(500).to_dict("records")
         for row in records:
             strike = number_or_none(row.get("strike"))
             bid = number_or_none(row.get("bid"))
@@ -662,7 +745,107 @@ def yfinance_option_chain(
                     "data_quality": "Delayed",
                 }
             )
-    return expirations, rows[:limit]
+    return rows
+
+
+def _yfinance_error_entry(symbol: str, exc: BaseException) -> dict[str, Any]:
+    detail = " ".join(str(exc).split())[:180] or exc.__class__.__name__
+    logger.warning("yfinance delayed-options fetch failed for %s: %s", symbol, detail)
+    return {
+        "ts": time.monotonic(),
+        "status": "error",
+        "expirations": [],
+        "contracts": [],
+        "fetched_at": None,
+        "message": (
+            f"The delayed options provider (Yahoo/yfinance) is temporarily unavailable for {symbol}. "
+            "This is a provider outage, not a confirmation that the ticker has no options."
+        ),
+    }
+
+
+def _fetch_yfinance_chain_entry(symbol: str, expiration: str | None) -> dict[str, Any]:
+    """Do the actual network fetch and build a cache entry. Retries once on transient network
+    errors only; any other failure (including HTTP status errors) becomes a negative-cache entry.
+
+    Known limitation: yfinance does not always raise on HTTP 429 — it can silently return an empty
+    frame — so a rate-limited response may still surface as "ok" with no contracts, same as today.
+    This hardens the cases where yfinance *does* raise; it does not claim to catch silent-empty 429s."""
+    transient = _transient_error_types()
+    attempt = 0
+    while True:
+        attempt += 1
+        fetched_at = datetime.now(timezone.utc).isoformat()
+        try:
+            import yfinance as yf  # type: ignore
+
+            ticker = yf.Ticker(symbol)
+            expirations = list(getattr(ticker, "options", []) or [])
+            if not expirations:
+                # Genuinely no options for this ticker — an "ok" empty result, not an outage.
+                return {
+                    "ts": time.monotonic(),
+                    "status": "ok",
+                    "expirations": [],
+                    "contracts": [],
+                    "fetched_at": fetched_at,
+                    "message": None,
+                }
+            selected_expiration = expiration if expiration in expirations else expirations[0]
+            chain = ticker.option_chain(selected_expiration)
+            rows = _build_yfinance_rows(symbol, selected_expiration, chain)
+        except transient as exc:
+            if attempt <= 1:
+                time.sleep(0.3)
+                continue
+            return _yfinance_error_entry(symbol, exc)
+        except Exception as exc:  # non-transient (parse/HTTP status/etc): fail fast, no retry
+            return _yfinance_error_entry(symbol, exc)
+        return {
+            "ts": time.monotonic(),
+            "status": "ok",
+            "expirations": expirations,
+            "contracts": rows,
+            "fetched_at": fetched_at,
+            "message": None,
+        }
+
+
+def _yfinance_chain_entry(symbol: str, expiration: str | None) -> dict[str, Any]:
+    """Cache + single-flight wrapper around the network fetch. Concurrent callers for the same key
+    block on one real fetch instead of all hitting Yahoo; successes and errors are both cached."""
+    key = (symbol, expiration or _DEFAULT_EXPIRATION_KEY)
+    entry = _read_options_cache(key)
+    if entry is not None:
+        return entry
+    with _options_lock(key):
+        # Another thread may have populated the cache while we waited on the lock.
+        entry = _read_options_cache(key)
+        if entry is not None:
+            return entry
+        entry = _fetch_yfinance_chain_entry(symbol, expiration)
+        _OPTIONS_CACHE[key] = entry
+        return entry
+
+
+def yfinance_option_chain(
+    symbol: str,
+    *,
+    expiration: str | None = None,
+    option_side: str | None = None,
+    limit: int = 120,
+) -> YFinanceChainResult:
+    entry = _yfinance_chain_entry(symbol, expiration)
+    contracts = entry["contracts"]
+    if option_side:
+        contracts = [contract for contract in contracts if contract.get("contract_type") == option_side]
+    return YFinanceChainResult(
+        expirations=list(entry["expirations"]),
+        contracts=contracts[:limit],
+        status=entry["status"],
+        fetched_at=entry["fetched_at"],
+        message=entry["message"],
+    )
 
 
 def attach_estimated_greeks(contracts: list[dict[str, Any]], underlying_price: float | None) -> list[dict[str, Any]]:
@@ -891,11 +1074,16 @@ def moneyness_label(moneyness: float, option_side: str) -> str:
     return "out of the money" if out_of_money else "in the money"
 
 
+def _cache_is_fresh(ts: float, ttl: float, *, now: float | None = None) -> bool:
+    """Shared TTL check for every in-memory market cache (FMP, Polygon, options)."""
+    return (time.monotonic() if now is None else now) - ts <= ttl
+
+
 def fmp_get(path: str, params: dict[str, str]) -> Any:
     cache_key = json.dumps([path, sorted(params.items())], sort_keys=True)
     now = time.monotonic()
     cached = _FMP_CACHE.get(cache_key)
-    if cached and now - cached[0] <= settings.market_cache_seconds:
+    if cached and _cache_is_fresh(cached[0], settings.market_cache_seconds, now=now):
         return cached[1]
     query = {**params, "apikey": settings.fmp_api_key}
     url = f"{FMP_STABLE_BASE}{path}?{urllib.parse.urlencode(query)}"
@@ -915,7 +1103,7 @@ def polygon_get(path: str, params: dict[str, str]) -> Any:
     cache_key = json.dumps(["polygon", path, sorted(params.items())], sort_keys=True)
     now = time.monotonic()
     cached = _POLYGON_CACHE.get(cache_key)
-    if cached and now - cached[0] <= settings.market_cache_seconds:
+    if cached and _cache_is_fresh(cached[0], settings.market_cache_seconds, now=now):
         return cached[1]
     query = {**params, "apiKey": settings.polygon_api_key}
     base = settings.massive_base_url or settings.polygon_base_url or "https://api.massive.com"
@@ -1078,6 +1266,13 @@ def clean_text(value: str) -> str:
             text = text.encode("latin1").decode("utf-8")
         except (UnicodeEncodeError, UnicodeDecodeError):
             pass
+    if any(marker in text for marker in (chr(0x00E2), chr(0x00C2), chr(0x00C3))):
+        for encoding in ("cp1252", "latin1"):
+            try:
+                text = text.encode(encoding).decode("utf-8")
+                break
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
     replacements = {
         "\u2019": "'",
         "\u2018": "'",

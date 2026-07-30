@@ -4,6 +4,7 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -13,6 +14,52 @@ from api.services import market_data
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _clear_options_cache():
+    """Isolate the delayed-options cache between tests so cache-hit assertions are deterministic."""
+    market_data._OPTIONS_CACHE.clear()
+    market_data._OPTIONS_LOCKS.clear()
+    yield
+    market_data._OPTIONS_CACHE.clear()
+    market_data._OPTIONS_LOCKS.clear()
+
+
+def _ok_entry(fetched_at: str) -> dict:
+    return {
+        "ts": market_data.time.monotonic(),
+        "status": "ok",
+        "expirations": ["2026-06-21"],
+        "contracts": [
+            {"contract_type": "call", "strike": 200, "strike_price": 200, "expiration_date": "2026-06-21", "data_quality": "Delayed"}
+        ],
+        "fetched_at": fetched_at,
+        "message": None,
+    }
+
+
+def _error_entry() -> dict:
+    return {
+        "ts": market_data.time.monotonic(),
+        "status": "error",
+        "expirations": [],
+        "contracts": [],
+        "fetched_at": None,
+        "message": "The delayed options provider (Yahoo/yfinance) is temporarily unavailable for AAPL.",
+    }
+
+
+class _RaisingYF:
+    """Stand-in for the yfinance module whose Ticker() raises, counting each real fetch attempt."""
+
+    def __init__(self, exc: BaseException, counter: list[int]) -> None:
+        self._exc = exc
+        self._counter = counter
+
+    def Ticker(self, symbol: str):  # noqa: N802 - mirrors yfinance.Ticker
+        self._counter[0] += 1
+        raise self._exc
 
 
 def test_market_search_shape_is_safe() -> None:
@@ -47,6 +94,13 @@ def test_market_search_ranks_exact_symbol_before_company_name_noise() -> None:
     )
 
     assert ranked[0]["symbol"] == "ACHR"
+
+
+def test_clean_text_repairs_common_provider_mojibake() -> None:
+    original = "Apple\u2019s services \u2014 iPhone demand\u00a0rises"
+    mojibake = original.encode("utf-8").decode("cp1252")
+
+    assert market_data.clean_text(mojibake) == "Apple's services - iPhone demand rises"
 
 
 def test_options_context_is_honest_about_missing_contract_feed() -> None:
@@ -476,3 +530,99 @@ def test_trade_check_returns_expiration_aware_agent_detail() -> None:
     assert body["risk_math"]["calendar_days_left"] >= 0
     assert "why_it_matters" in body["agent_docket"][0]
     assert "next_question" in body["agent_docket"][0]
+
+
+# --- Delayed options hardening: caching, negative caching, retry, freshness, honest outage ---
+
+
+def test_delayed_chain_success_is_cached(monkeypatch) -> None:
+    counter = [0]
+
+    def fake_fetch(symbol, expiration):
+        counter[0] += 1
+        return _ok_entry(f"stamp-{counter[0]}")
+
+    monkeypatch.setattr(market_data, "_fetch_yfinance_chain_entry", fake_fetch)
+
+    first = market_data.yfinance_option_chain("AAPL")
+    second = market_data.yfinance_option_chain("AAPL")
+
+    assert counter[0] == 1  # second call served from cache, no re-fetch
+    assert first.available and second.available
+    assert first.contracts and second.contracts
+
+
+def test_delayed_chain_error_is_negatively_cached(monkeypatch) -> None:
+    counter = [0]
+
+    def fake_fetch(symbol, expiration):
+        counter[0] += 1
+        return _error_entry()
+
+    monkeypatch.setattr(market_data, "_fetch_yfinance_chain_entry", fake_fetch)
+
+    first = market_data.yfinance_option_chain("AAPL")
+    second = market_data.yfinance_option_chain("AAPL")
+
+    # An outage must not turn into a request storm: the second call is served from the negative cache.
+    assert counter[0] == 1
+    assert not first.available and not second.available
+    assert first.contracts == [] and second.contracts == []
+
+
+def test_fetched_at_is_stable_across_cache_hits(monkeypatch) -> None:
+    counter = [0]
+
+    def fake_fetch(symbol, expiration):
+        counter[0] += 1
+        return _ok_entry(f"stamp-{counter[0]}")
+
+    monkeypatch.setattr(market_data, "_fetch_yfinance_chain_entry", fake_fetch)
+
+    first = market_data.yfinance_option_chain("AAPL")
+    second = market_data.yfinance_option_chain("AAPL")
+
+    # fetched_at reflects the real fetch time, not request time — so it is identical across cache hits.
+    assert first.fetched_at is not None
+    assert first.fetched_at == second.fetched_at
+
+
+def test_transient_fetch_error_retries_once(monkeypatch) -> None:
+    counter = [0]
+    monkeypatch.setattr(market_data.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "yfinance", _RaisingYF(TimeoutError("network blip"), counter))
+
+    entry = market_data._fetch_yfinance_chain_entry("AAPL", None)
+
+    # One retry on a transient network error => exactly two attempts, then an honest error entry.
+    assert counter[0] == 2
+    assert entry["status"] == "error"
+    assert entry["fetched_at"] is None
+
+
+def test_nontransient_fetch_error_does_not_retry(monkeypatch) -> None:
+    counter = [0]
+    monkeypatch.setattr(market_data.time, "sleep", lambda *a, **k: None)
+    monkeypatch.setitem(sys.modules, "yfinance", _RaisingYF(ValueError("unexpected schema"), counter))
+
+    entry = market_data._fetch_yfinance_chain_entry("AAPL", None)
+
+    # A non-transient error (e.g. parse/HTTP-status) fails fast with no retry.
+    assert counter[0] == 1
+    assert entry["status"] == "error"
+
+
+def test_options_chain_endpoint_reports_honest_unavailable(monkeypatch) -> None:
+    monkeypatch.setattr(market_data, "yfinance_enabled", lambda: True)
+    monkeypatch.setattr(market_data, "polygon_enabled", lambda: False)
+    monkeypatch.setattr(market_data, "_fetch_yfinance_chain_entry", lambda symbol, expiration: _error_entry())
+
+    response = client.get("/market/options/chain/AAPL")
+
+    assert response.status_code == 200
+    body = response.json()
+    # A provider outage is surfaced honestly, not disguised as "no options exist".
+    assert body["status"] == "yfinance_unavailable"
+    assert body["contracts"] == []
+    assert "unavailable" in body["message"].lower()
+    assert body["fetched_at"] is None

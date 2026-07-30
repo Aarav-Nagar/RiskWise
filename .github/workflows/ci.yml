@@ -38,22 +38,29 @@ jobs:
       - run: |
           python - <<'PY'
           import sys
+          from datetime import datetime, timedelta
           sys.path.insert(0, "backend")
           from fastapi.testclient import TestClient
           from api.app import app
           client = TestClient(app)
           assert client.get("/health").status_code == 200
+          # A long-option check needs a *future* expiration and a premium, and
+          # amount_at_risk must match the backend max-loss (premium * contracts * 100).
+          # Compute the date so this smoke can't rot the way a hardcoded one did
+          # (the hardcoded "Jun 21, 2026" went stale and failed the build in 2026-07).
           payload = {
               "user_id": "ci_smoke_user",
               "ticker": "AAPL",
               "trade_type": "Call Option (Long)",
               "strike": 190,
-              "expiration": "Jun 21, 2026",
+              "expiration": (datetime.now() + timedelta(days=90)).strftime("%b %d, %Y"),
+              "premium": 2.50,
+              "contracts": 1,
               "amount_at_risk": 250,
               "timeframe": "1-2 Weeks",
               "account_size": 10000,
           }
           response = client.post("/trade-check", json=payload)
-          assert response.status_code == 200
+          assert response.status_code == 200, response.text
           assert "agent_docket" in response.json()
           PY

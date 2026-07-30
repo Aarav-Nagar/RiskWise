@@ -168,11 +168,30 @@ class TradeCheckResponse(BaseModel):
     data_quality: dict[str, Any] = Field(default_factory=dict)
 
 
+class PredictionLock(BaseModel):
+    conviction_pct: float = Field(ge=0, le=100)
+    direction: str = Field(min_length=1, max_length=40)
+    thesis_text: str = Field(default="", max_length=2000)
+    underlying_at_lock: float | None = Field(default=None, ge=0)
+    breakeven: float | None = Field(default=None, ge=0)
+    expiration: str
+    locked_at: str | None = None
+
+
+class CheckResolution(BaseModel):
+    status: str = "pending"
+    underlying_at_expiry: float | None = Field(default=None, ge=0)
+    touched_breakeven: bool | None = None
+    hit: bool | None = None
+    resolved_at: str | None = None
+
+
 class SavedCheckRequest(BaseModel):
     user_id: str
     trade_check_id: str | None = None
     report: dict[str, Any]
     note: str = ""
+    prediction_lock: PredictionLock | None = None
 
 
 class SavedCheckResponse(BaseModel):
@@ -181,7 +200,72 @@ class SavedCheckResponse(BaseModel):
     tradeCheckId: str | None = None
     report: dict[str, Any]
     note: str = ""
+    prediction_lock: PredictionLock | None = None
+    resolution: CheckResolution | None = None
     createdAt: str
+
+
+class AlternativesRequest(BaseModel):
+    user_id: str
+    report: dict[str, Any]
+    user_profile: dict[str, Any] | None = None
+    market_contracts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AlternativesResponse(BaseModel):
+    status: str
+    fit_basis: str
+    probability_basis: str
+    original: dict[str, Any]
+    profile_context: dict[str, Any]
+    weights: dict[str, float]
+    candidates: list[dict[str, Any]]
+    message: str
+
+
+class ChallengeStartRequest(BaseModel):
+    user_id: str
+    report: dict[str, Any]
+    conviction_pct: float = Field(ge=0, le=100)
+    direction: str = Field(min_length=1, max_length=40)
+    thesis_text: str = Field(default="", max_length=2000)
+    user_profile: dict[str, Any] | None = None
+
+
+class ChallengeStartResponse(BaseModel):
+    status: str
+    session: dict[str, Any]
+    prediction_lock: PredictionLock
+    message: str
+
+
+class ChallengeAnswer(BaseModel):
+    dimension: str = Field(min_length=1, max_length=24)
+    answer: str = Field(default="", max_length=4000)
+
+
+class ChallengeGradeRequest(BaseModel):
+    user_id: str
+    report: dict[str, Any]
+    session: dict[str, Any]
+    answers: list[ChallengeAnswer]
+    prediction_lock: PredictionLock | None = None
+    user_profile: dict[str, Any] | None = None
+
+
+class ChallengeGradeResponse(BaseModel):
+    status: str
+    grading_basis: str
+    score_label: str
+    coverage_basis: str
+    questions: list[dict[str, Any]]
+    overall_score: float
+    verdict: dict[str, Any]
+    follow_up: dict[str, Any] | None = None
+    probability: dict[str, Any]
+    prediction_lock: dict[str, Any]
+    conviction_gap_pct: float | None = None
+    message: str
 
 
 class SavedCheckExportResponse(BaseModel):
@@ -286,6 +370,8 @@ class OptionsContextResponse(BaseModel):
     fields_ready: list[str] = Field(default_factory=list)
     fields_pending: list[str] = Field(default_factory=list)
     message: str
+    # UTC ISO8601 timestamp of when delayed data was fetched, when applicable. None for capability-only responses.
+    fetched_at: str | None = None
 
 
 class MarketQuoteResponse(BaseModel):
@@ -379,6 +465,9 @@ class OptionsAvailabilityResponse(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
     earnings: list[dict[str, Any]] = Field(default_factory=list)
     message: str = ""
+    # UTC ISO8601 timestamp of the delayed-data fetch (yfinance). None when no delayed fetch occurred
+    # (reference/estimated providers) or when the provider was unavailable.
+    fetched_at: str | None = None
 
 
 class MarketProviderCapability(BaseModel):

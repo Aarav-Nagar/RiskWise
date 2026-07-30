@@ -5,7 +5,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import { Card } from "../components/Card";
-import { ErrorCard, Header, MissingDataNote, numberOrNull, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
+import { ErrorCard, formatFetchedAt, greeting, Header, MissingDataNote, numberOrNull, PrimaryButton, ScreenScroll, sharedText } from "../components/Shared";
 import { extractContractFromAttachment, getMarketBundle, getOptionsChain, getOptionsExpirations, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -104,6 +104,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
   const [expirations, setExpirations] = useState([]);
   const [contractReferences, setContractReferences] = useState([]);
   const [contractProviderMessage, setContractProviderMessage] = useState("");
+  const [contractFetchedAt, setContractFetchedAt] = useState("");
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(parseDate(draft.expiration) || addDays(new Date(), 30)));
   const [runningProgress, setRunningProgress] = useState(0);
   const [localReport, setLocalReport] = useState(null);
@@ -181,6 +182,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
     if (!symbol || !draft.expiration) {
       setContractReferences([]);
       setContractProviderMessage("");
+      setContractFetchedAt("");
       return undefined;
     }
     let cancelled = false;
@@ -190,11 +192,13 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
         const rows = Array.isArray(chain?.contracts) ? chain.contracts : [];
         setContractReferences(rows.slice(0, 80));
         setContractProviderMessage(chain?.message || "");
+        setContractFetchedAt(chain?.fetched_at || "");
       })
       .catch(() => {
         if (!cancelled) {
           setContractReferences([]);
           setContractProviderMessage("");
+          setContractFetchedAt("");
         }
       });
     return () => {
@@ -424,6 +428,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
             validation={optionValidation}
             contractReferences={contractReferences}
             providerMessage={contractProviderMessage}
+            fetchedAt={contractFetchedAt}
             onSelectContract={(contract) => {
               if (!contract) return;
               updateDraft({
@@ -599,7 +604,7 @@ export function CheckScreen({ user, draft, setDraft, onCheck, loading, error }) 
 
   return (
     <ScreenScroll>
-      <Header title={`Good morning, ${draft.user}`} subtitle="Choose how much information you already have." />
+      <Header title={greeting(user)} subtitle="Choose how much information you already have." />
       <Card style={styles.snapshot}>
         <View style={styles.rowBetween}>
           <Text style={sharedText.cardLabel}>Account Snapshot</Text>
@@ -709,8 +714,8 @@ function SearchBox({ query, setQuery, results, searching, selectedTicker, onSele
 
 function TickerCard({ ticker, market }) {
   const quote = market?.quote;
-  const price = quote?.price || mockPrice(ticker.symbol);
-  const change = quote?.changePercentage ?? quote?.change_percent ?? mockChange(ticker.symbol);
+  const price = numberOrNull(quote?.price);
+  const change = numberOrNull(quote?.changePercentage ?? quote?.change_percent);
   return (
     <Card style={styles.tickerCard}>
       <View style={styles.symbolLogo}>
@@ -721,8 +726,16 @@ function TickerCard({ ticker, market }) {
         <Text style={styles.resultName}>{ticker.name}</Text>
       </View>
       <View style={styles.priceBox}>
-        <Text style={styles.priceText}>${Number(price).toFixed(2)}</Text>
-        <Text style={styles.changeText}>{Number(change) >= 0 ? "+" : ""}{Number(change).toFixed(2)}%</Text>
+        {price === null ? (
+          <Text style={styles.priceMissingText}>Price missing</Text>
+        ) : (
+          <Text style={styles.priceText}>${price.toFixed(2)}</Text>
+        )}
+        {change === null ? (
+          <Text style={styles.changeMissingText}>No quote</Text>
+        ) : (
+          <Text style={change >= 0 ? styles.changeText : styles.changeTextDown}>{change >= 0 ? "+" : ""}{change.toFixed(2)}%</Text>
+        )}
       </View>
     </Card>
   );
@@ -823,7 +836,8 @@ function MiniCalendar({ visibleMonth, selected, setVisibleMonth, onSelect }) {
   );
 }
 
-function ContractDetailsStep({ draft, setNumericField, validation, contractReferences = [], providerMessage = "", onSelectContract, onContinue }) {
+function ContractDetailsStep({ draft, setNumericField, validation, contractReferences = [], providerMessage = "", fetchedAt = "", onSelectContract, onContinue }) {
+  const fetchedLabel = formatFetchedAt(fetchedAt);
   const spread = isSpreadStructure(draft.structure || draft.tradeType);
   const requiredReady = !validation.strike && !validation.premium && !validation.spread && !validation.bidAsk && !validation.impliedVolatility && !validation.openInterest && !validation.contractVolume;
   const side = draft.optionSide || (draft.structure?.includes("put") ? "put" : "call");
@@ -839,6 +853,9 @@ function ContractDetailsStep({ draft, setNumericField, validation, contractRefer
             <View style={styles.flex}>
               <Text style={styles.referenceTitle}>Real contract references</Text>
               <Text style={styles.referenceSub}>Tap a strike to attach the exchange contract symbol. Premium and IV still need live quote access or manual entry.</Text>
+              {fetchedLabel ? (
+                <Text style={styles.referenceSub}>Fetched {fetchedLabel} · Yahoo data is typically delayed 15–20 min.</Text>
+              ) : null}
             </View>
             <Ionicons name="shield-checkmark-outline" size={19} color={palette.green} />
           </View>
@@ -1924,14 +1941,6 @@ function recentName(symbol) {
   return found?.name || `${normalizeSymbol(symbol)} ticker`;
 }
 
-function mockPrice(symbol) {
-  return { AAPL: 197.02, NVDA: 113.5, SPY: 602.1, MSFT: 442.7, QQQ: 531.4, ACHR: 8.26 }[normalizeSymbol(symbol)] || 50;
-}
-
-function mockChange(symbol) {
-  return { AAPL: 0.63, NVDA: 1.1, SPY: 0.24, MSFT: 0.42, QQQ: 0.36, ACHR: -1.8 }[normalizeSymbol(symbol)] || 0.15;
-}
-
 function parseDate(value) {
   if (!value) return null;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? new Date(`${value}T00:00:00`) : new Date(value);
@@ -2179,7 +2188,10 @@ const styles = StyleSheet.create({
   bigSymbol: { color: palette.dark, fontSize: 18, fontWeight: "900" },
   priceBox: { alignItems: "flex-end" },
   priceText: { color: palette.dark, fontSize: 13, fontWeight: "900" },
+  priceMissingText: { color: palette.muted, fontSize: 11, fontWeight: "800" },
   changeText: { color: palette.green, fontSize: 10, fontWeight: "900", marginTop: 3 },
+  changeTextDown: { color: palette.red, fontSize: 10, fontWeight: "900", marginTop: 3 },
+  changeMissingText: { color: palette.muted, fontSize: 9, fontWeight: "800", marginTop: 3 },
   selectable: { minHeight: 70, borderWidth: 1, borderColor: palette.border, borderRadius: 16, backgroundColor: "#FFFFFF", padding: 13, flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 10 },
   selectableActive: { borderColor: palette.green, backgroundColor: "#F4FFF7" },
   radio: { width: 26, height: 26, borderRadius: 13, borderWidth: 1, borderColor: palette.border, alignItems: "center", justifyContent: "center", backgroundColor: "#FFFFFF" },

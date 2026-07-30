@@ -1,4 +1,4 @@
-const API_RE = /\/(market|trade-check|saved-checks|chat|extract-contract)(\/|\?|$)/;
+const API_RE = /\/(market|trade-check|saved-checks|chat|extract-contract|alternatives|challenge)(\/|\?|$)/;
 
 async function installBackendMocks(page) {
   await page.route(API_RE, async (route) => {
@@ -207,8 +207,127 @@ async function installBackendMocks(page) {
       });
     }
 
+    if (path === "/alternatives" && request.method() === "POST") {
+      return fulfill(route, buildAlternativesResponse());
+    }
+
+    if (path === "/challenge/start" && request.method() === "POST") {
+      const body = JSON.parse(request.postData() || "{}");
+      return fulfill(route, buildChallengeStartResponse(body));
+    }
+
+    if (path === "/challenge/grade" && request.method() === "POST") {
+      const body = JSON.parse(request.postData() || "{}");
+      return fulfill(route, buildChallengeGradeResponse(body));
+    }
+
     return fulfill(route, {});
   });
+}
+
+function buildAlternativesResponse() {
+  return {
+    status: "ok",
+    fit_basis: "profile_weighted_subscores_v1",
+    probability_basis: "delayed_iv_black_scholes",
+    original: { ticker: "ACHR", kind: "long_option", max_loss: 125, breakeven: 11.25, days_left: 35 },
+    profile_context: { risk_style: "Balanced", max_risk_per_trade_percent: 2, over_profile_limit: false },
+    weights: { risk_reduction: 0.3, thesis_preservation: 0.3, time_relief: 0.2, cost_efficiency: 0.2 },
+    candidates: [
+      {
+        type: "later_expiration",
+        label: "Same contract, later expiration",
+        thesis_note: "Keeps the full directional thesis and buys more time past the current expiry pressure.",
+        status: "ok",
+        metrics: { max_loss: 170, breakeven: 11.7, days_to_expiry: 63, contracts: 1 },
+        probability: { status: "ok", basis: "delayed_iv_black_scholes", p_profit: 0.41, p_max_profit: null, p_max_loss: 0.46 },
+        fit: {
+          score: 71.5,
+          sub_scores: [
+            { name: "thesis_preservation", value: 1.0, weight: 0.3, weighted: 0.3, included: true },
+            { name: "time_relief", value: 0.44, weight: 0.2, weighted: 0.089, included: true },
+            { name: "risk_reduction", value: 0.0, weight: 0.3, weighted: 0.0, included: true },
+            { name: "cost_efficiency", value: 0.0, weight: 0.2, weighted: 0.0, included: true }
+          ]
+        }
+      },
+      {
+        type: "wait",
+        label: "Wait — no position",
+        thesis_note: "The baseline every candidate competes against: zero premium at risk while the thesis is re-checked.",
+        status: "ok",
+        metrics: { max_loss: 0, breakeven: null, days_to_expiry: null, contracts: 0 },
+        probability: { status: "not_applicable", basis: "delayed_iv_black_scholes", p_profit: null, p_max_loss: null, reason: "no_position" },
+        fit: {
+          score: 62.5,
+          sub_scores: [
+            { name: "risk_reduction", value: 1.0, weight: 0.3, weighted: 0.3, included: true },
+            { name: "thesis_preservation", value: 0.0, weight: 0.3, weighted: 0.0, included: true },
+            { name: "cost_efficiency", value: 1.0, weight: 0.2, weighted: 0.2, included: true }
+          ]
+        }
+      }
+    ],
+    message: "QA alternatives payload."
+  };
+}
+
+function buildChallengeStartResponse(body) {
+  const dimensions = ["Sizing", "Breakeven", "Volatility", "Liquidity", "Exit"];
+  return {
+    status: "ok",
+    session: {
+      ticker: "ACHR",
+      questions: dimensions.map((dimension) => ({
+        dimension,
+        question: `QA ${dimension} question?`,
+        numeric_check: dimension === "Sizing" ? { expected: 2.0, unit: "percent of account" } : null,
+        salience: 0.8,
+        evidence: `${dimension} salience from QA fixture`,
+        concept_anchor_count: 4
+      })),
+      salience: {},
+      facts: { risk_percent_of_account: 2.0, profile_limit_pct: 2.0 },
+      created_at: new Date().toISOString()
+    },
+    prediction_lock: {
+      conviction_pct: body.conviction_pct ?? 50,
+      direction: body.direction || "bullish",
+      thesis_text: body.thesis_text || "",
+      underlying_at_lock: 9.84,
+      breakeven: 11.25,
+      expiration: futureIso(35),
+      locked_at: new Date().toISOString()
+    },
+    message: "QA challenge session."
+  };
+}
+
+function buildChallengeGradeResponse(body) {
+  const questions = (body.session?.questions || []).map((question) => ({
+    dimension: question.dimension,
+    question: question.question,
+    answer: "",
+    numeric: null,
+    coverage: { value: 0.5, threshold: 0.18, credit: 1.0, near_zero: false, basis: "keyword_overlap_fallback" },
+    understanding: null,
+    feedback: "",
+    final_score: 0.75
+  }));
+  return {
+    status: "ok",
+    grading_basis: "concept_coverage_only",
+    score_label: "coverage score",
+    coverage_basis: "keyword_overlap_fallback",
+    questions,
+    overall_score: 0.75,
+    verdict: { verdict: "Revise", overall_score: 0.75, hard_cap_applied: false, hard_cap_reason: "", gate: { proceed_min: 0.7, revise_min: 0.45 } },
+    follow_up: null,
+    probability: { status: "ok", basis: "delayed_iv_black_scholes", p_profit: 0.42, p_max_profit: null, p_max_loss: 0.5, missing: [] },
+    prediction_lock: body.prediction_lock || { conviction_pct: 50 },
+    conviction_gap_pct: 8,
+    message: "QA challenge grade."
+  };
 }
 
 function collectBrowserErrors(page) {

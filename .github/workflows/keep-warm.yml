@@ -1,0 +1,46 @@
+name: Keep Render Warm
+
+# Pings the deployed API on a schedule so Render's free-tier instance does not
+# spin down (it idles out after ~15 min), which otherwise makes the first tester
+# request eat a 30-50s cold start. A lightweight GET /health is enough to keep it hot.
+#
+# Notes / caveats:
+# - GitHub cron only runs on the repo's DEFAULT branch, and only after this file
+#   is committed + pushed there. Uncommitted local edits do nothing.
+# - GitHub disables scheduled workflows after 60 days of NO repo activity.
+# - Scheduled runs are best-effort: GitHub can delay them several minutes under load,
+#   so the effective interval is "~10 min or a bit more", never faster.
+# - Uses no secrets; hits only the public health endpoint.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes (UTC); GitHub may run it late
+  workflow_dispatch: {}       # allow manual "ping now" from the Actions tab
+
+concurrency:
+  group: keep-warm
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health (warm the instance)
+        env:
+          API_BASE_URL: https://riskwise-api.onrender.com
+        run: |
+          echo "Pinging ${API_BASE_URL}/health ..."
+          # Cold start can take 30-50s, so allow up to 90s and one retry.
+          code=$(curl -sS -o /tmp/health.json -w "%{http_code}" \
+            --connect-timeout 15 --max-time 90 --retry 1 --retry-delay 5 \
+            "${API_BASE_URL}/health") || true
+          echo "HTTP ${code}"
+          echo "Body: $(cat /tmp/health.json 2>/dev/null)"
+          if [ "$code" != "200" ]; then
+            echo "::warning::Keep-warm ping returned HTTP ${code} (instance may have been cold or down)"
+            exit 1
+          fi
+          echo "Instance is warm."

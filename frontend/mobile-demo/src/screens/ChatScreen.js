@@ -1,15 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
 import * as ImagePicker from "expo-image-picker";
 import * as Sharing from "expo-sharing";
-import { getSavedCheckExport, listChatMessages, listChatThreads, sendChatMessage } from "../services/apiClient";
+import { fetchAlternatives, getSavedCheckExport, gradeChallenge, listChatMessages, listChatThreads, startChallenge, streamChatMessage } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
-const askModes = ["Explain", "Review", "Compare"];
+const askModes = ["Explain", "Challenge", "Alternatives"];
+
+const demoCoachTrades = [
+  { id: "demo-aapl", ticker: "AAPL", tradeType: "7D Call @ $200", expiration: "Jun 7, 2025", contracts: 1, maxLoss: "$320", maxLossPct: "3.2%", breakeven: "$203.20", dte: "7 days", iv: "27.3%", liquidity: "Medium" },
+  { id: "demo-tsla", ticker: "TSLA", tradeType: "14D Put @ $180", expiration: "Jun 10, 2025", contracts: 1, maxLoss: "$410", maxLossPct: "2.8%", breakeven: "$175.90", dte: "14 days", iv: "31.8%", liquidity: "Medium" },
+  { id: "demo-nvda", ticker: "NVDA", tradeType: "21D Call @ $950", expiration: "Jun 9, 2025", contracts: 1, maxLoss: "$680", maxLossPct: "4.1%", breakeven: "$956.80", dte: "21 days", iv: "35.1%", liquidity: "High" },
+  { id: "demo-spy", ticker: "SPY", tradeType: "5D Put @ $525", expiration: "Jun 6, 2025", contracts: 2, maxLoss: "$250", maxLossPct: "1.0%", breakeven: "$523.75", dte: "5 days", iv: "18.4%", liquidity: "High" }
+];
+
+const challengeTopics = ["Thesis & Timing", "Breakeven", "Risk & Size", "IV & Volatility", "Exit Plan"];
 
 export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) {
   const [threadId, setThreadId] = useState(null);
@@ -28,6 +37,17 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
   const [exportLoading, setExportLoading] = useState(false);
   const [exportPreview, setExportPreview] = useState(null);
   const [exportStatus, setExportStatus] = useState("");
+  const [sheet, setSheet] = useState(null);
+  const [challengeStarted, setChallengeStarted] = useState(false);
+  const [challengeIndex, setChallengeIndex] = useState(0);
+  const [answerDraft, setAnswerDraft] = useState("");
+  const [challengeAnswers, setChallengeAnswers] = useState([]);
+  const [challengeSession, setChallengeSession] = useState(null);
+  const [challengeResult, setChallengeResult] = useState(null);
+  const [challengeLoading, setChallengeLoading] = useState(false);
+  const [conviction, setConviction] = useState("");
+  const [direction, setDirection] = useState("bullish");
+  const [alternativeDetail, setAlternativeDetail] = useState(null);
   const scrollRef = useRef(null);
   const tradeOptions = useMemo(() => buildTradeOptions(currentReport, savedChecks), [currentReport, savedChecks]);
   const selectedSavedCheck = useMemo(
@@ -59,50 +79,92 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
     setUploadStatus("");
     setMessages((items) => [...items, { role: "user", content: messageText, attachments: outgoingAttachments }]);
     setLoading(true);
+
+    // Progressive reveal: a "Thinking..." bubble (via `loading`) covers the full compute + guard
+    // pass; once `meta` lands we swap in a streaming assistant bubble and append `delta` chunks.
+    const placeholderId = `assistant-stream-${Date.now()}`;
+    let placeholderAdded = false;
+    let receivedContent = false;
+    const updateStreaming = (patch) =>
+      setMessages((items) => items.map((m) => (m.id === placeholderId ? { ...m, ...patch } : m)));
+    const ensurePlaceholder = (patch = {}) => {
+      setLoading(false);
+      if (placeholderAdded) {
+        updateStreaming(patch);
+      } else {
+        placeholderAdded = true;
+        setMessages((items) => [...items, { role: "assistant", id: placeholderId, content: "", streaming: true, ...patch }]);
+      }
+    };
+
     try {
-      const response = await sendChatMessage({
+      await streamChatMessage({
         user,
         threadId,
         message: messageText,
         currentReport: selectedTrade,
         chatMode,
         analysisDepth,
-        attachments: outgoingAttachments
+        attachments: outgoingAttachments,
+        onMeta: (meta) => {
+          if (meta.thread_id) {
+            setThreadId(meta.thread_id);
+          }
+          ensurePlaceholder({
+            mode: meta.mode,
+            analysisDepth: meta.analysis_depth,
+            confidence: meta.confidence,
+            missingData: meta.missing_data || [],
+            riskFlags: meta.risk_flags || [],
+            toolsUsed: meta.tools_used || [],
+            whatUsed: meta.what_used || [],
+            summaryCards: meta.summary_cards || [],
+            visualBlocks: meta.visual_blocks || [],
+            agentDocket: meta.agent_docket || [],
+            provider: meta.provider,
+            usedFallback: meta.used_fallback,
+            suggestedPrompts: meta.suggested_prompts || []
+          });
+        },
+        onDelta: (chunk) => {
+          if (!chunk) {
+            return;
+          }
+          receivedContent = true;
+          if (!placeholderAdded) {
+            ensurePlaceholder();
+          }
+          setMessages((items) => items.map((m) => (m.id === placeholderId ? { ...m, content: (m.content || "") + chunk } : m)));
+        },
+        onDone: (data) => {
+          if (data?.thread_id) {
+            setThreadId(data.thread_id);
+          }
+          ensurePlaceholder({ streaming: false });
+          if (historyOpen) {
+            refreshThreads();
+          }
+        }
       });
-      setThreadId(response.thread_id);
-      if (historyOpen) {
-        refreshThreads();
+      if (placeholderAdded && !receivedContent) {
+        updateStreaming({ streaming: false, content: "The coach didn't return an answer. Please try again in a moment." });
       }
-      setMessages((items) => [
-        ...items,
-        {
-          role: "assistant",
-          content: response.answer,
-          mode: response.mode,
-          analysisDepth: response.analysis_depth,
-          confidence: response.confidence,
-          missingData: response.missing_data || [],
-          riskFlags: response.risk_flags || [],
-          toolsUsed: response.tools_used || [],
-          whatUsed: response.what_used || [],
-          summaryCards: response.summary_cards || [],
-          visualBlocks: response.visual_blocks || [],
-          agentDocket: response.agent_docket || [],
-          provider: response.provider,
-          usedFallback: response.used_fallback,
-          confidence: response.confidence,
-          suggestedPrompts: response.suggested_prompts || []
-        }
-      ]);
     } catch (err) {
-      setMessages((items) => [
-        ...items,
-        {
-          role: "assistant",
-          content: "The coach is unavailable right now. Your checks are still saved, and you can try again in a moment.",
-          mode: "fallback"
-        }
-      ]);
+      if (placeholderAdded) {
+        updateStreaming({
+          streaming: false,
+          content: "The coach is unavailable right now. Your checks are still saved, and you can try again in a moment."
+        });
+      } else {
+        setMessages((items) => [
+          ...items,
+          {
+            role: "assistant",
+            content: "The coach is unavailable right now. Your checks are still saved, and you can try again in a moment.",
+            mode: "fallback"
+          }
+        ]);
+      }
     } finally {
       setLoading(false);
     }
@@ -156,7 +218,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
   }
 
   function openAttachmentMenu() {
-    setAttachmentMenuOpen((open) => !open);
+    setSheet("add-context");
   }
 
   async function selectUploadSource(source) {
@@ -358,9 +420,39 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
 
       {historyOpen ? <HistoryPanel threads={threads} activeId={threadId} onOpen={openThread} onNew={newThread} /> : null}
 
-      <Pressable style={styles.contextRow} onPress={() => setPickerOpen((open) => !open)}>
+      {chatMode === "Challenge" ? (
+        <ChallengeCoach
+          selectedTrade={selectedTrade}
+          started={challengeStarted}
+          session={challengeSession}
+          result={challengeResult}
+          loading={challengeLoading}
+          topicIndex={challengeIndex}
+          answerDraft={answerDraft}
+          answers={challengeAnswers}
+          conviction={conviction}
+          direction={direction}
+          onConviction={setConviction}
+          onDirection={setDirection}
+          onAnswer={setAnswerDraft}
+          onStart={startChallengeSession}
+          onHowItWorks={() => setSheet("how-it-works")}
+          onChangeTrade={() => setSheet("trade-context")}
+          onSubmit={submitChallengeAnswer}
+          onRestart={resetChallenge}
+          onAlternatives={() => setChatMode("Alternatives")}
+        />
+      ) : null}
+
+      {chatMode === "Alternatives" ? (
+        <AlternativesCoach user={user} selectedTrade={selectedTrade} onChangeTrade={() => setSheet("trade-context")} onDetail={setAlternativeDetail} />
+      ) : null}
+
+      {chatMode === "Explain" ? (
+        <>
+      <Pressable style={styles.contextRow} onPress={() => setSheet("trade-context")}>
         <Text style={styles.contextValue} numberOfLines={1}>{selectedTrade ? tradeTitle(selectedTrade) : "No trade selected"}</Text>
-        <Text style={styles.changeText}>{pickerOpen ? "Close" : "Trade context"}</Text>
+        <Text style={styles.changeText}>Trade context</Text>
       </Pressable>
       {pickerOpen ? (
         <View style={styles.pickerPanel}>
@@ -383,7 +475,7 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
 
       <ScrollView ref={scrollRef} style={styles.chatScroll} contentContainerStyle={styles.chatContent} showsVerticalScrollIndicator={false}>
         {messages.map((message, index) => (
-          <MessageBubble key={`${message.role}-${index}-${message.content.slice(0, 8)}`} message={message} />
+          <MessageBubble key={message.id || `${message.role}-${index}-${(message.content || "").slice(0, 8)}`} message={message} />
         ))}
         {loading ? (
           <View style={[styles.bubble, styles.aiBubble]}>
@@ -434,12 +526,142 @@ export function ChatScreen({ user, currentReport, savedChecks = [], navigate }) 
         onCopy={copyExternalAiExport}
         onDownload={downloadExternalAiExport}
       />
+        </>
+      ) : null}
+      <CoachSheet visible={sheet === "add-context"} onClose={() => setSheet(null)}>
+        <Text style={styles.coachSheetTitle}>Add context</Text>
+        <SheetAction icon="cloud-upload-outline" title="Upload" subtitle="Photo, screenshot, PDF, CSV, or text" onPress={() => selectUploadSource("upload")} />
+        <SheetAction icon="albums-outline" title="Select saved Check or trade" subtitle="Choose context for Coach modes" onPress={() => setSheet("trade-context")} />
+        <SheetAction icon="document-text-outline" title="Export for AI Review" subtitle={selectedSavedCheck ? "Preview a saved Check as Markdown" : "Select a saved Check first"} disabled={!selectedSavedCheck} onPress={() => selectUploadSource("external_ai_export")} />
+        <SheetAction icon="sparkles-outline" title="Deep Analysis" subtitle="Run the 5-agent committee" onPress={() => selectUploadSource("deep_analysis")} />
+        <SheetAction icon="book-outline" title="Use Example" subtitle="Load a sample trade/report" onPress={() => { chooseTrade(demoCoachTrades[0]); setSheet(null); }} />
+      </CoachSheet>
+      <CoachSheet visible={sheet === "trade-context"} onClose={() => setSheet(null)}>
+        <Text style={styles.coachSheetTitle}>Trade context</Text>
+        <Text style={styles.coachSheetSub}>Select a trade</Text>
+        {currentReport ? <TradeContextRow report={currentReport} active={selectedTrade?.id === currentReport.id} onPress={() => chooseTrade(currentReport)} /> : null}
+        {tradeOptions.length ? <Text style={styles.coachSheetSection}>Saved trades</Text> : null}
+        {tradeOptions.map((option) => <TradeContextRow key={option.key} report={option.report} active={selectedTrade?.id === option.report.id} onPress={() => chooseTrade(option.report)} />)}
+        <Text style={styles.coachSheetSection}>Development examples</Text>
+        {demoCoachTrades.map((report) => <TradeContextRow key={report.id} report={report} active={selectedTrade?.id === report.id} onPress={() => chooseTrade(report)} />)}
+        <Pressable style={styles.coachSheetButton} onPress={() => { setSheet(null); navigate?.("Check"); }}>
+          <Ionicons name="add-circle-outline" size={18} color={palette.green} />
+          <Text style={styles.coachSheetButtonText}>Start a new Check</Text>
+        </Pressable>
+      </CoachSheet>
+      <CoachSheet visible={sheet === "how-it-works"} onClose={() => setSheet(null)}>
+        <Text style={styles.coachSheetTitle}>How this works</Text>
+        <InfoSheetRow icon="help-buoy-outline" title="We ask questions" text="One at a time, focused on what matters most for your trade." />
+        <InfoSheetRow icon="search-outline" title="You answer honestly" text="Your answers help us understand your thinking, not predict the market." />
+        <InfoSheetRow icon="bulb-outline" title="We find the gaps" text="RiskWise highlights anything that could hurt the trade." />
+        <InfoSheetRow icon="trending-up-outline" title="You get better decisions" text="Know whether to keep, change, or skip the idea." />
+        <Pressable accessibilityLabel="Got it" style={styles.coachSheetButton} onPress={() => setSheet(null)}>
+          <Text style={styles.coachSheetButtonText}>Got it</Text>
+        </Pressable>
+      </CoachSheet>
+      <CoachSheet visible={Boolean(alternativeDetail)} onClose={() => setAlternativeDetail(null)}>
+        <Text style={styles.coachSheetTitle}>{alternativeDetail?.label}</Text>
+        <Text style={styles.coachSheetSub}>
+          {alternativeDetail?.fit?.score != null ? `Fit score ${alternativeDetail.fit.score}/100 (profile-weighted)` : "Fit score unavailable"}
+        </Text>
+        <Text style={styles.altNote}>{alternativeDetail?.thesis_note}</Text>
+        {(alternativeDetail?.fit?.sub_scores || []).filter((sub) => sub.included).map((sub) => (
+          <Text key={sub.name} style={styles.challengeSub}>
+            {`${subScoreLabel(sub.name)}: ${(sub.value * 100).toFixed(0)}/100 x weight ${sub.weight}`}
+          </Text>
+        ))}
+        {alternativeDetail?.probability?.status === "ok" ? (
+          <Text style={styles.challengeSub}>
+            {`P(profit) ${Math.round(alternativeDetail.probability.p_profit * 100)}% / P(max loss) ${Math.round(alternativeDetail.probability.p_max_loss * 100)}% — delayed-IV Black-Scholes`}
+          </Text>
+        ) : null}
+        {alternativeDetail?.status === "needs_live_premium" ? (
+          <Text style={styles.challengeSub}>Unpriced: the needed premium is not attached and RiskWise does not invent prices.</Text>
+        ) : null}
+      </CoachSheet>
     </View>
   );
 
   function chooseTrade(report) {
     setSelectedTrade(report);
     setPickerOpen(false);
+    setSheet(null);
+    resetChallenge();
+  }
+
+  function resetChallenge() {
+    setChallengeStarted(false);
+    setChallengeIndex(0);
+    setAnswerDraft("");
+    setChallengeAnswers([]);
+    setChallengeSession(null);
+    setChallengeResult(null);
+  }
+
+  async function startChallengeSession() {
+    if (!selectedTrade) {
+      setSheet("trade-context");
+      return;
+    }
+    const convictionPct = Number(conviction);
+    if (!Number.isFinite(convictionPct) || convictionPct < 0 || convictionPct > 100) {
+      Alert.alert("Conviction needed", "Enter how convinced you are this trade works, from 0 to 100%, before the questions start.");
+      return;
+    }
+    setChallengeLoading(true);
+    try {
+      const started = await startChallenge({
+        user,
+        report: selectedTrade,
+        convictionPct,
+        direction
+      });
+      setChallengeSession(started);
+      setChallengeAnswers([]);
+      setChallengeIndex(0);
+      setAnswerDraft("");
+      setChallengeResult(null);
+      setChallengeStarted(true);
+    } catch (err) {
+      Alert.alert("Challenge unavailable", err.message);
+    } finally {
+      setChallengeLoading(false);
+    }
+  }
+
+  async function submitChallengeAnswer() {
+    const questions = challengeSession?.session?.questions || [];
+    const question = questions[challengeIndex];
+    if (!question || challengeLoading) {
+      return;
+    }
+    const answer = answerDraft.trim() || "Skipped for now.";
+    const nextAnswers = [
+      ...challengeAnswers.filter((item) => item.dimension !== question.dimension),
+      { dimension: question.dimension, answer }
+    ];
+    setChallengeAnswers(nextAnswers);
+    setAnswerDraft("");
+    if (challengeIndex < questions.length - 1) {
+      setChallengeIndex((value) => value + 1);
+      return;
+    }
+    setChallengeLoading(true);
+    try {
+      const graded = await gradeChallenge({
+        user,
+        report: selectedTrade,
+        session: challengeSession.session,
+        answers: nextAnswers,
+        predictionLock: challengeSession.prediction_lock
+      });
+      setChallengeResult(graded);
+      setChallengeStarted("summary");
+    } catch (err) {
+      Alert.alert("Grading unavailable", err.message);
+    } finally {
+      setChallengeLoading(false);
+    }
   }
 }
 
@@ -477,6 +699,383 @@ function AttachmentMenu({ onPick, onClose, canExport }) {
   );
 }
 
+function ChallengeCoach({ selectedTrade, started, session, result, loading, topicIndex, answerDraft, answers, conviction, direction, onConviction, onDirection, onAnswer, onStart, onHowItWorks, onChangeTrade, onSubmit, onRestart, onAlternatives }) {
+  const questions = session?.session?.questions || [];
+  const topics = questions.length ? questions.map((item) => item.dimension) : challengeTopics;
+
+  if (started === "summary" && result) {
+    const scorePct = Math.round((result.overall_score || 0) * 100);
+    const verdict = result.verdict || {};
+    const probability = result.probability || {};
+    const lock = result.prediction_lock || {};
+    const isRubric = result.grading_basis === "llm_rubric";
+    return (
+      <ScrollView style={styles.coachModeScroll} contentContainerStyle={styles.coachModeContent} showsVerticalScrollIndicator={false}>
+        <SelectedCoachTrade report={selectedTrade} onChangeTrade={onChangeTrade} />
+        <ChallengeProgress index={topics.length - 1} topics={topics} complete />
+        <View style={styles.summaryCard}>
+          <View style={styles.scoreRing}>
+            <Text style={styles.scoreNumber}>{scorePct}</Text>
+            <Text style={styles.scoreSub}>/100</Text>
+          </View>
+          <View style={styles.flex}>
+            <Text style={styles.challengeTitle}>{isRubric ? "Your understanding score" : "Your coverage score"}</Text>
+            <Text style={styles.challengeSub}>
+              {isRubric
+                ? "Graded by the local rubric model plus deterministic risk-math checks."
+                : "The local grading model was unavailable, so this reflects concept coverage and the numeric risk-math checks only."}
+            </Text>
+          </View>
+        </View>
+        <View style={styles.recommendationCard}>
+          <Text style={styles.recommendationLabel}>Overall recommendation</Text>
+          <Text style={styles.recommendationValue}>{verdict.verdict || "Revise"}</Text>
+          <Text style={styles.challengeSub}>
+            {verdict.hard_cap_applied
+              ? `Capped at Revise because ${verdict.hard_cap_reason}.`
+              : "Deterministic gate over your per-question scores."}
+          </Text>
+        </View>
+        {probability.status === "ok" ? (
+          <View style={styles.recommendationCard}>
+            <Text style={styles.recommendationLabel}>Model probability — revealed only now</Text>
+            <Text style={styles.recommendationValue}>{Math.round((probability.p_profit || 0) * 100)}% chance of profit at expiry</Text>
+            <Text style={styles.challengeSub}>
+              Basis: delayed-IV Black-Scholes. You locked {Math.round(lock.conviction_pct ?? 0)}% conviction before the questions
+              {result.conviction_gap_pct != null
+                ? ` — ${Math.abs(result.conviction_gap_pct).toFixed(0)} points ${result.conviction_gap_pct > 0 ? "above" : "below"} the model.`
+                : "."}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.recommendationCard}>
+            <Text style={styles.recommendationLabel}>Model probability</Text>
+            <Text style={styles.challengeSub}>
+              Not computable for this trade ({(probability.missing || []).join(", ") || "missing inputs"}). RiskWise never substitutes a default volatility.
+            </Text>
+          </View>
+        )}
+        {result.follow_up ? (
+          <View style={styles.concernCard}>
+            <Ionicons name="help-circle-outline" size={22} color="#F97316" />
+            <Text style={styles.concernText}>{result.follow_up.question}</Text>
+          </View>
+        ) : null}
+        <Pressable accessibilityLabel="View better alternatives" style={styles.challengePrimary} onPress={onAlternatives}>
+          <Ionicons name="scale-outline" size={20} color="#FFFFFF" />
+          <Text style={styles.challengePrimaryText}>View better alternatives</Text>
+        </Pressable>
+        <Pressable accessibilityLabel="Run the Challenge again" style={styles.linkButton} onPress={onRestart}>
+          <Text style={styles.linkButtonText}>Run again</Text>
+        </Pressable>
+      </ScrollView>
+    );
+  }
+
+  if (started && questions.length) {
+    const question = questions[Math.min(topicIndex, questions.length - 1)];
+    const isLast = topicIndex >= questions.length - 1;
+    return (
+      <ScrollView style={styles.coachModeScroll} contentContainerStyle={styles.coachModeContent} showsVerticalScrollIndicator={false}>
+        <SelectedCoachTrade report={selectedTrade} onChangeTrade={onChangeTrade} />
+        <ChallengeProgress index={topicIndex} topics={topics} answers={answers} />
+        <View style={styles.questionCard}>
+          <View style={styles.questionIntro}>
+            <View style={styles.iconHalo}>
+              <Ionicons name="locate-outline" size={22} color={palette.green} />
+            </View>
+            <View style={styles.flex}>
+              <Text style={styles.challengeTitle}>Question {topicIndex + 1} of {questions.length}</Text>
+              <Text style={styles.challengeSub}>We will focus on {String(question.dimension || "").toLowerCase()}.</Text>
+            </View>
+          </View>
+          <Text style={styles.greenHeading}>{question.dimension}</Text>
+          <Text style={styles.questionText}>{question.question}</Text>
+          <View style={styles.hintRow}>
+            <Ionicons name="bulb-outline" size={17} color={palette.green} />
+            <Text style={styles.challengeSub}>Why this was asked: {question.evidence}.</Text>
+          </View>
+          <View style={styles.answerBox}>
+            <TextInput
+              value={answerDraft}
+              onChangeText={onAnswer}
+              placeholder="Type your answer..."
+              placeholderTextColor={palette.muted}
+              style={styles.answerInput}
+              multiline
+            />
+            <Text style={styles.answerCount}>{answerDraft.length} / 1000</Text>
+          </View>
+          <View style={styles.challengeActions}>
+            <Pressable style={styles.mutedChallenge} onPress={onSubmit} disabled={loading}>
+              <Text style={styles.mutedChallengeText}>Skip for now</Text>
+            </Pressable>
+            <Pressable style={styles.primaryChallengeSmall} onPress={onSubmit} disabled={loading}>
+              {loading ? <ActivityIndicator size="small" color="#FFFFFF" /> : (
+                <Text style={styles.primaryChallengeText}>{isLast ? "Submit & grade" : "Submit answer"}</Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </ScrollView>
+    );
+  }
+
+  return (
+    <ScrollView style={styles.coachModeScroll} contentContainerStyle={styles.coachModeContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.challengeInitial}>
+        <View style={styles.challengeInitialHeader}>
+          <View style={styles.flex}>
+            <Text style={styles.challengeScreenTitle}>Challenge Your Trade</Text>
+            <Text style={styles.challengeSub}>Test your understanding. Uncover hidden risks.</Text>
+          </View>
+          <View style={styles.securePill}>
+            <Ionicons name="shield-checkmark-outline" size={13} color={palette.green} />
+            <Text style={styles.secureText}>Private & Secure</Text>
+          </View>
+        </View>
+        <SelectedCoachTrade report={selectedTrade} onChangeTrade={onChangeTrade} />
+        <View style={styles.questionCard}>
+          <Text style={styles.greenHeading}>Lock your conviction first</Text>
+          <Text style={styles.challengeSub}>
+            State how convinced you are this trade works, from 0 to 100%. It is locked before any question is shown, and the model's
+            probability stays hidden until the end so it cannot anchor you.
+          </Text>
+          <View style={styles.challengeActions}>
+            <Pressable
+              style={direction === "bullish" ? styles.primaryChallengeSmall : styles.mutedChallenge}
+              onPress={() => onDirection("bullish")}
+            >
+              <Text style={direction === "bullish" ? styles.primaryChallengeText : styles.mutedChallengeText}>Bullish</Text>
+            </Pressable>
+            <Pressable
+              style={direction === "bearish" ? styles.primaryChallengeSmall : styles.mutedChallenge}
+              onPress={() => onDirection("bearish")}
+            >
+              <Text style={direction === "bearish" ? styles.primaryChallengeText : styles.mutedChallengeText}>Bearish</Text>
+            </Pressable>
+          </View>
+          <View style={styles.answerBox}>
+            <TextInput
+              value={conviction}
+              onChangeText={onConviction}
+              placeholder="Conviction, e.g. 65"
+              placeholderTextColor={palette.muted}
+              style={styles.answerInput}
+              keyboardType="numeric"
+            />
+            <Text style={styles.answerCount}>%</Text>
+          </View>
+        </View>
+        <Pressable accessibilityLabel="Start Challenge" style={styles.challengePrimary} onPress={onStart} disabled={loading}>
+          {loading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Ionicons name="locate-outline" size={22} color="#FFFFFF" />}
+          <Text style={styles.challengePrimaryText}>{loading ? "Preparing questions..." : "Lock conviction & start"}</Text>
+        </Pressable>
+        <Pressable accessibilityLabel="How this works" style={styles.linkButton} onPress={onHowItWorks}>
+          <Text style={styles.linkButtonText}>How this works</Text>
+        </Pressable>
+      </View>
+      <PrivacyNote />
+    </ScrollView>
+  );
+}
+
+function AlternativesCoach({ user, selectedTrade, onChangeTrade, onDetail }) {
+  const [state, setState] = useState({ loading: false, data: null, error: "" });
+
+  useEffect(() => {
+    let active = true;
+    if (!selectedTrade) {
+      setState({ loading: false, data: null, error: "" });
+      return undefined;
+    }
+    setState({ loading: true, data: null, error: "" });
+    fetchAlternatives({ user, report: selectedTrade })
+      .then((data) => { if (active) setState({ loading: false, data, error: "" }); })
+      .catch((err) => { if (active) setState({ loading: false, data: null, error: err.message }); });
+    return () => { active = false; };
+  }, [selectedTrade?.id]);
+
+  const candidates = state.data?.candidates || [];
+  return (
+    <ScrollView style={styles.coachModeScroll} contentContainerStyle={styles.coachModeContent} showsVerticalScrollIndicator={false}>
+      <View style={styles.altHeaderCard}>
+        <View style={styles.flex}>
+          <Text style={styles.challengeScreenTitle}>Better-fitting alternatives</Text>
+          <Text style={styles.challengeSub}>Same thesis, different structures — scored against your risk profile.</Text>
+        </View>
+        <Pressable onPress={onChangeTrade}>
+          <Text style={styles.changeText}>Change trade</Text>
+        </Pressable>
+      </View>
+      <View style={styles.altInfoCard}>
+        <Text style={styles.challengeTitle}>Original trade</Text>
+        <Text style={styles.tradeOptionLabel}>{selectedTrade ? tradeTitle(selectedTrade) : "No trade selected"}</Text>
+        <Text style={styles.challengeSub}>
+          {state.data?.profile_context?.over_profile_limit
+            ? `Above your ${state.data.profile_context.max_risk_per_trade_percent}% per-trade risk limit, so risk reduction is weighted up.`
+            : "RiskWise compares against the selected Check context."}
+        </Text>
+      </View>
+      {!selectedTrade ? (
+        <View style={styles.altInfoCard}>
+          <Text style={styles.challengeSub}>Select a saved Check so RiskWise can price alternatives from the real report.</Text>
+        </View>
+      ) : null}
+      {state.loading ? (
+        <View style={styles.altInfoCard}>
+          <ActivityIndicator size="small" color={palette.green} />
+          <Text style={styles.challengeSub}>Pricing alternatives from the same payoff math...</Text>
+        </View>
+      ) : null}
+      {state.error ? (
+        <View style={styles.altInfoCard}>
+          <Text style={styles.challengeSub}>{state.error}</Text>
+        </View>
+      ) : null}
+      {candidates.map((item, index) => (
+        <Pressable key={item.type} accessibilityLabel={`Open ${item.label} alternative`} style={styles.altCard} onPress={() => onDetail(item)}>
+          <View style={styles.altCardTop}>
+            <View style={styles.altRank}><Text style={styles.altRankText}>{index + 1}</Text></View>
+            <View style={styles.flex}>
+              <Text style={styles.challengeTitle}>{item.label}</Text>
+              <Text style={styles.challengeSub}>
+                {item.fit?.score != null ? `Fit score ${item.fit.score}/100` : "Fit score unavailable"}
+                {item.status === "needs_live_premium" ? " - needs live premium data" : ""}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={palette.muted} />
+          </View>
+          <Text style={styles.altNote}>{candidateSummary(item)}</Text>
+        </Pressable>
+      ))}
+    </ScrollView>
+  );
+}
+
+function subScoreLabel(name) {
+  return {
+    risk_reduction: "Risk reduction",
+    thesis_preservation: "Thesis preservation",
+    time_relief: "Time relief",
+    cost_efficiency: "Cost efficiency"
+  }[name] || name;
+}
+
+function candidateSummary(candidate) {
+  if (candidate.status === "needs_live_premium") {
+    return `${candidate.thesis_note} RiskWise will not invent the missing premium, so this candidate stays unpriced until delayed chain data is attached.`;
+  }
+  const metrics = candidate.metrics || {};
+  const parts = [];
+  if (metrics.max_loss != null) parts.push(`Max loss ${formatMoney(metrics.max_loss)}`);
+  if (metrics.breakeven != null) parts.push(`breakeven ${formatMoney(metrics.breakeven)}`);
+  if (metrics.days_to_expiry != null) parts.push(`${Math.round(metrics.days_to_expiry)} days`);
+  const probability = candidate.probability || {};
+  if (probability.status === "ok" && probability.p_profit != null) {
+    parts.push(`${Math.round(probability.p_profit * 100)}% P(profit), delayed-IV basis`);
+  }
+  const line = parts.join(" - ");
+  return line ? `${candidate.thesis_note} ${line}.` : candidate.thesis_note;
+}
+
+function SelectedCoachTrade({ report, onChangeTrade }) {
+  if (!report) {
+    return (
+      <View style={styles.selectedCoachTrade}>
+        <Text style={styles.challengeTitle}>Selected Trade</Text>
+        <Text style={styles.challengeSub}>No trade selected yet.</Text>
+        <Pressable onPress={onChangeTrade}><Text style={styles.changeText}>Choose trade</Text></Pressable>
+      </View>
+    );
+  }
+  // Real backend reports keep these under riskMath/contractSnapshot; the flat
+  // report.maxLoss/... shape only exists on the labelled development examples.
+  // Missing values must read as missing, never as demo numbers.
+  const riskMath = report.riskMath || report.risk_math || {};
+  const snapshot = report.contractSnapshot || report.contract_snapshot || {};
+  const maxLoss = riskMath.max_loss != null ? formatMoney(riskMath.max_loss) : report.maxLoss || "Not available";
+  const breakeven = riskMath.breakeven != null ? formatMoney(riskMath.breakeven) : report.breakeven || "Not available";
+  const dteDays = riskMath.calendar_days_left ?? riskMath.trading_days_left;
+  const dte = dteDays != null ? `${dteDays} days` : report.dte || "Not available";
+  const ivValue = snapshot.implied_volatility ?? snapshot.impliedVolatility ?? report.implied_volatility;
+  const iv = ivValue != null ? formatIvPercent(ivValue) : report.iv || "Not attached";
+  return (
+    <View style={styles.selectedCoachTrade}>
+      <View style={styles.tradeTop}>
+        <TickerLogo ticker={report.ticker} />
+        <View style={styles.flex}>
+          <Text style={styles.tradeOptionLabel}>{tradeTitle(report)}</Text>
+          <Text style={styles.challengeSub}>{report.expiration || "Selected Check"} - {report.contracts || snapshot.contracts || 1} Contract</Text>
+        </View>
+        <Pressable onPress={onChangeTrade}><Text style={styles.changeText}>Change trade</Text></Pressable>
+      </View>
+      <View style={styles.metricStrip}>
+        <MiniMetric label="Max loss" value={maxLoss} danger />
+        <MiniMetric label="Breakeven" value={breakeven} />
+        <MiniMetric label="DTE" value={dte} />
+        <MiniMetric label="IV" value={iv} />
+      </View>
+    </View>
+  );
+}
+
+function formatMoney(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "Not available";
+  }
+  return `$${number.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
+}
+
+function formatIvPercent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return "Not attached";
+  }
+  // Delayed feeds report IV as a decimal (0.27) or a percent (27); match the backend's convention.
+  return `${(number > 3 ? number : number * 100).toFixed(1)}%`;
+}
+
+function ChallengeProgress({ index, complete, topics = challengeTopics }) {
+  return (
+    <View style={styles.progressCard}>
+      <View style={styles.progressHeader}>
+        <Text style={styles.challengeTitle}>Challenge progress</Text>
+        <Text style={styles.challengeTitle}>{complete ? `${topics.length} of ${topics.length}` : `${index + 1} of ${topics.length}`}</Text>
+      </View>
+      <View style={styles.progressSteps}>
+        {topics.map((topic, step) => (
+          <View key={topic} style={styles.progressStep}>
+            <View style={[styles.progressDot, (complete || step <= index) && styles.progressDotActive]}>
+              <Text style={[styles.progressDotText, (complete || step <= index) && styles.progressDotTextActive]}>{complete || step < index ? "✓" : step + 1}</Text>
+            </View>
+            <Text style={[styles.progressLabel, step === index && styles.progressLabelActive]} numberOfLines={1}>{topic}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function MiniMetric({ label, value, danger }) {
+  return (
+    <View style={styles.miniMetric}>
+      <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={[styles.metricValue, danger && styles.metricDanger]}>{value}</Text>
+    </View>
+  );
+}
+
+function PrivacyNote() {
+  return (
+    <View style={styles.privacyRow}>
+      <Ionicons name="lock-closed" size={12} color={palette.muted} />
+      <Text style={styles.challengeSub}>Your answers are private and used only to improve your experience.</Text>
+    </View>
+  );
+}
+
 function AttachmentAction({ icon, title, subtitle, onPress, disabled = false }) {
   return (
     <Pressable
@@ -498,54 +1097,134 @@ function AttachmentAction({ icon, title, subtitle, onPress, disabled = false }) 
   );
 }
 
-function ExportReviewModal({ visible, loading, exportData, status, onClose, onCopy, onDownload }) {
+function CoachSheet({ visible, onClose, children }) {
+  const sheet = (
+    <Pressable style={styles.coachSheetBackdrop} onPress={onClose}>
+      <Pressable style={styles.coachSheetFrame} onPress={(event) => event.stopPropagation()}>
+        <View style={styles.sheetGrabber} />
+        <Pressable accessibilityLabel="Close sheet" style={styles.coachSheetClose} onPress={onClose}>
+          <Ionicons name="close" size={17} color={palette.dark} />
+        </Pressable>
+        <ScrollView style={styles.coachSheetScroll} contentContainerStyle={styles.coachSheetContent} showsVerticalScrollIndicator={false}>
+          {children}
+        </ScrollView>
+      </Pressable>
+    </Pressable>
+  );
+  if (Platform.OS === "web") {
+    return visible ? sheet : null;
+  }
   return (
     <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
-      <Pressable style={styles.exportBackdrop} onPress={onClose}>
-        <Pressable style={styles.exportSheet} onPress={(event) => event.stopPropagation()}>
-          <View style={styles.exportHeader}>
-            <View style={styles.exportTitleWrap}>
-              <Text style={styles.exportEyebrow}>EXTERNAL AI REVIEW</Text>
-              <Text style={styles.exportTitle}>Export saved Check</Text>
-            </View>
-            <Pressable accessibilityLabel="Close export preview" style={styles.exportClose} onPress={onClose}>
-              <Ionicons name="close" size={18} color={palette.dark} />
-            </Pressable>
-          </View>
+      {sheet}
+    </Modal>
+  );
+}
 
-          {loading ? (
-            <View style={styles.exportLoading}>
-              <ActivityIndicator color={palette.green} />
-              <Text style={styles.exportLoadingText}>Building your export...</Text>
+function SheetAction({ icon, title, subtitle, onPress, disabled = false }) {
+  return (
+    <Pressable accessibilityLabel={title} disabled={disabled} style={[styles.sheetAction, disabled && styles.sheetActionDisabled]} onPress={onPress}>
+      <View style={styles.sheetIcon}>
+        <Ionicons name={icon} size={19} color={palette.green} />
+      </View>
+      <View style={styles.flex}>
+        <Text style={styles.sheetActionTitle}>{title}</Text>
+        <Text style={styles.sheetActionSub}>{subtitle}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={17} color={palette.muted} />
+    </Pressable>
+  );
+}
+
+function InfoSheetRow({ icon, title, text }) {
+  return (
+    <View style={styles.infoSheetRow}>
+      <View style={styles.sheetIcon}>
+        <Ionicons name={icon} size={19} color={palette.green} />
+      </View>
+      <View style={styles.flex}>
+        <Text style={styles.sheetActionTitle}>{title}</Text>
+        <Text style={styles.sheetActionSub}>{text}</Text>
+      </View>
+    </View>
+  );
+}
+
+function TradeContextRow({ report, active, onPress }) {
+  return (
+    <Pressable style={[styles.tradeContextRow, active && styles.tradeContextRowActive]} onPress={onPress}>
+      <TickerLogo ticker={report.ticker} small />
+      <View style={styles.flex}>
+        <Text style={styles.tradeOptionLabel}>{tradeTitle(report)}</Text>
+        <Text style={styles.tradeOptionSub}>{report.expiration || "Saved Check"} - {report.contracts || 1} Contract</Text>
+      </View>
+      <Ionicons name={active ? "checkmark-circle" : "chevron-forward"} size={19} color={active ? palette.green : palette.dark} />
+    </Pressable>
+  );
+}
+
+function TickerLogo({ ticker, small = false }) {
+  return (
+    <View style={[styles.tickerLogo, small && styles.tickerLogoSmall]}>
+      <Text style={[styles.tickerLogoText, small && styles.tickerLogoTextSmall]}>{String(ticker || "RW").slice(0, 4).toUpperCase()}</Text>
+    </View>
+  );
+}
+
+function ExportReviewModal({ visible, loading, exportData, status, onClose, onCopy, onDownload }) {
+  const content = (
+    <Pressable style={styles.exportBackdrop} onPress={onClose}>
+      <Pressable style={styles.exportSheet} onPress={(event) => event.stopPropagation()}>
+        <View style={styles.exportHeader}>
+          <View style={styles.exportTitleWrap}>
+            <Text style={styles.exportEyebrow}>EXTERNAL AI REVIEW</Text>
+            <Text style={styles.exportTitle}>Export saved Check</Text>
+          </View>
+          <Pressable accessibilityLabel="Close export preview" style={styles.exportClose} onPress={onClose}>
+            <Ionicons name="close" size={18} color={palette.dark} />
+          </Pressable>
+        </View>
+
+        {loading ? (
+          <View style={styles.exportLoading}>
+            <ActivityIndicator color={palette.green} />
+            <Text style={styles.exportLoadingText}>Building your export...</Text>
+          </View>
+        ) : exportData?.markdown ? (
+          <>
+            <ScrollView style={styles.exportPreview} contentContainerStyle={styles.exportPreviewContent}>
+              <Text selectable style={styles.exportMarkdown}>{exportData.markdown}</Text>
+            </ScrollView>
+            <Text style={styles.exportGuidance}>
+              Paste this into Claude, ChatGPT, or any AI assistant. When you have a response, come back and paste it here in Coach as a follow-up message.
+            </Text>
+            <View style={styles.exportActions}>
+              <Pressable accessibilityLabel="Copy export to clipboard" style={styles.exportSecondaryButton} onPress={onCopy}>
+                <Ionicons name="copy-outline" size={17} color={palette.green} />
+                <Text style={styles.exportSecondaryText}>Copy to clipboard</Text>
+              </Pressable>
+              <Pressable accessibilityLabel="Download export as a file" style={styles.exportPrimaryButton} onPress={onDownload}>
+                <Ionicons name="download-outline" size={17} color="#FFFFFF" />
+                <Text style={styles.exportPrimaryText}>Download as file</Text>
+              </Pressable>
             </View>
-          ) : exportData?.markdown ? (
-            <>
-              <ScrollView style={styles.exportPreview} contentContainerStyle={styles.exportPreviewContent}>
-                <Text selectable style={styles.exportMarkdown}>{exportData.markdown}</Text>
-              </ScrollView>
-              <Text style={styles.exportGuidance}>
-                Paste this into Claude, ChatGPT, or any AI assistant. When you have a response, come back and paste it here in Coach as a follow-up message.
-              </Text>
-              <View style={styles.exportActions}>
-                <Pressable accessibilityLabel="Copy export to clipboard" style={styles.exportSecondaryButton} onPress={onCopy}>
-                  <Ionicons name="copy-outline" size={17} color={palette.green} />
-                  <Text style={styles.exportSecondaryText}>Copy to clipboard</Text>
-                </Pressable>
-                <Pressable accessibilityLabel="Download export as a file" style={styles.exportPrimaryButton} onPress={onDownload}>
-                  <Ionicons name="download-outline" size={17} color="#FFFFFF" />
-                  <Text style={styles.exportPrimaryText}>Download as file</Text>
-                </Pressable>
-              </View>
-            </>
-          ) : (
-            <View style={styles.exportLoading}>
-              <Ionicons name="alert-circle-outline" size={24} color={palette.red} />
-              <Text selectable style={styles.exportError}>{status || "Could not build this export."}</Text>
-            </View>
-          )}
-          {status && exportData?.markdown ? <Text selectable style={styles.exportStatus}>{status}</Text> : null}
-        </Pressable>
+          </>
+        ) : (
+          <View style={styles.exportLoading}>
+            <Ionicons name="alert-circle-outline" size={24} color={palette.red} />
+            <Text selectable style={styles.exportError}>{status || "Could not build this export."}</Text>
+          </View>
+        )}
+        {status && exportData?.markdown ? <Text selectable style={styles.exportStatus}>{status}</Text> : null}
       </Pressable>
+    </Pressable>
+  );
+  if (Platform.OS === "web") {
+    return visible ? content : null;
+  }
+  return (
+    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+      {content}
     </Modal>
   );
 }
@@ -1604,5 +2283,577 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textAlign: "center",
     marginTop: 7
+  },
+  flex: {
+    flex: 1
+  },
+  coachModeScroll: {
+    flex: 1
+  },
+  coachModeContent: {
+    gap: 12,
+    paddingBottom: 96
+  },
+  challengeInitial: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 20,
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    gap: 14,
+    boxShadow: "0 8px 28px rgba(15, 23, 42, 0.07)"
+  },
+  challengeInitialHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    flexWrap: "wrap"
+  },
+  challengeScreenTitle: {
+    color: palette.dark,
+    fontSize: 22,
+    lineHeight: 27,
+    fontWeight: "900"
+  },
+  challengeTitle: {
+    color: palette.dark,
+    fontSize: 14,
+    fontWeight: "900"
+  },
+  challengeSub: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+    marginTop: 3
+  },
+  securePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: palette.greenSoft,
+    paddingHorizontal: 9,
+    paddingVertical: 7
+  },
+  secureText: {
+    color: palette.green,
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  selectedCoachTrade: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    padding: 14,
+    gap: 12
+  },
+  tradeTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12
+  },
+  tickerLogo: {
+    width: 52,
+    height: 52,
+    borderRadius: 13,
+    backgroundColor: "#050712",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  tickerLogoSmall: {
+    width: 38,
+    height: 38,
+    borderRadius: 10
+  },
+  tickerLogoText: {
+    color: "#FFFFFF",
+    fontSize: 13,
+    fontWeight: "900"
+  },
+  tickerLogoTextSmall: {
+    fontSize: 9
+  },
+  metricStrip: {
+    flexDirection: "row",
+    gap: 8
+  },
+  miniMetric: {
+    flex: 1,
+    borderRadius: 12,
+    backgroundColor: "#F7FAF7",
+    padding: 8,
+    alignItems: "center"
+  },
+  metricLabel: {
+    color: palette.muted,
+    fontSize: 9,
+    fontWeight: "800"
+  },
+  metricValue: {
+    color: palette.dark,
+    fontSize: 11,
+    fontWeight: "900",
+    marginTop: 4
+  },
+  metricDanger: {
+    color: palette.red
+  },
+  concernCard: {
+    borderWidth: 1,
+    borderColor: "#FED7AA",
+    borderRadius: 16,
+    backgroundColor: "#FFF7ED",
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10
+  },
+  concernText: {
+    flex: 1,
+    color: palette.dark,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "800"
+  },
+  challengePrimary: {
+    minHeight: 54,
+    borderRadius: 14,
+    backgroundColor: palette.green,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8
+  },
+  challengePrimaryText: {
+    color: "#FFFFFF",
+    fontSize: 15,
+    fontWeight: "900"
+  },
+  linkButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8
+  },
+  linkButtonText: {
+    color: palette.green,
+    fontWeight: "900",
+    textDecorationLine: "underline"
+  },
+  progressCard: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    gap: 12
+  },
+  progressHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between"
+  },
+  progressSteps: {
+    flexDirection: "row",
+    gap: 6
+  },
+  progressStep: {
+    flex: 1,
+    alignItems: "center",
+    gap: 5
+  },
+  progressDot: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  progressDotActive: {
+    backgroundColor: palette.green,
+    borderColor: palette.green
+  },
+  progressDotText: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "900"
+  },
+  progressDotTextActive: {
+    color: "#FFFFFF"
+  },
+  progressLabel: {
+    color: palette.muted,
+    fontSize: 9,
+    fontWeight: "800",
+    textAlign: "center"
+  },
+  progressLabelActive: {
+    color: palette.green
+  },
+  questionCard: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    padding: 14,
+    gap: 12
+  },
+  questionIntro: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    borderRadius: 15,
+    backgroundColor: "#F4FBF7",
+    padding: 12
+  },
+  iconHalo: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: palette.greenSoft,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  greenHeading: {
+    color: palette.green,
+    fontSize: 16,
+    fontWeight: "900"
+  },
+  questionText: {
+    color: palette.dark,
+    fontSize: 16,
+    lineHeight: 25,
+    fontWeight: "900"
+  },
+  hintRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
+  },
+  answerBox: {
+    minHeight: 108,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 14,
+    backgroundColor: "#FDFEFD",
+    padding: 12
+  },
+  answerInput: {
+    flex: 1,
+    color: palette.dark,
+    fontSize: 14,
+    textAlignVertical: "top",
+    outlineStyle: "none"
+  },
+  answerCount: {
+    color: palette.muted,
+    textAlign: "right",
+    fontSize: 11,
+    fontWeight: "700"
+  },
+  challengeActions: {
+    flexDirection: "row",
+    gap: 8
+  },
+  secondaryChallenge: {
+    flex: 1,
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 5,
+    paddingHorizontal: 6
+  },
+  secondaryChallengeText: {
+    color: palette.green,
+    fontSize: 11,
+    fontWeight: "900",
+    textAlign: "center"
+  },
+  mutedChallenge: {
+    flex: 0.78,
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 13,
+    backgroundColor: "#F8FAF8",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  mutedChallengeText: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "900",
+    textAlign: "center"
+  },
+  primaryChallengeSmall: {
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 13,
+    backgroundColor: palette.green,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  primaryChallengeText: {
+    color: "#FFFFFF",
+    fontSize: 11,
+    fontWeight: "900",
+    textAlign: "center"
+  },
+  summaryCard: {
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    borderRadius: 18,
+    backgroundColor: "#F4FBF7",
+    padding: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14
+  },
+  scoreRing: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    borderWidth: 8,
+    borderColor: palette.green,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF"
+  },
+  scoreNumber: {
+    color: palette.dark,
+    fontSize: 24,
+    fontWeight: "900"
+  },
+  scoreSub: {
+    color: palette.muted,
+    fontSize: 10,
+    fontWeight: "800"
+  },
+  recommendationCard: {
+    borderWidth: 1,
+    borderColor: "#FED7AA",
+    borderRadius: 16,
+    backgroundColor: "#FFF7ED",
+    padding: 14
+  },
+  recommendationLabel: {
+    color: palette.muted,
+    fontSize: 10,
+    fontWeight: "900"
+  },
+  recommendationValue: {
+    color: "#F97316",
+    fontSize: 18,
+    fontWeight: "900",
+    marginVertical: 4
+  },
+  altHeaderCard: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10
+  },
+  altInfoCard: {
+    borderWidth: 1,
+    borderColor: "#CFEFD8",
+    borderRadius: 16,
+    backgroundColor: "#F4FBF7",
+    padding: 14
+  },
+  altCard: {
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 18,
+    backgroundColor: "#FFFFFF",
+    padding: 14,
+    gap: 12,
+    boxShadow: "0 8px 28px rgba(15, 23, 42, 0.06)"
+  },
+  altCardTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12
+  },
+  altRank: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: palette.green,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  altRankText: {
+    color: "#FFFFFF",
+    fontWeight: "900"
+  },
+  altNote: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "700"
+  },
+  privacyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 7,
+    paddingVertical: 8
+  },
+  coachSheetBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.24)",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    ...(Platform.OS === "web"
+      ? { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, zIndex: 50 }
+      : null)
+  },
+  coachSheetFrame: {
+    width: "100%",
+    maxWidth: 420,
+    maxHeight: Platform.OS === "web" ? "92vh" : "92%",
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: "#FFFFFF",
+    paddingTop: 22,
+    marginHorizontal: 12,
+    marginBottom: 10,
+    overflow: "hidden",
+    boxShadow: "0 -12px 34px rgba(15, 23, 42, 0.14)"
+  },
+  coachSheetScroll: {
+    maxHeight: Platform.OS === "web" ? "calc(92vh - 48px)" : 640
+  },
+  coachSheetContent: {
+    gap: 12,
+    padding: 16,
+    paddingTop: 8,
+    paddingBottom: 16
+  },
+  sheetGrabber: {
+    position: "absolute",
+    top: 8,
+    alignSelf: "center",
+    width: 44,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: "#D1D5DB"
+  },
+  coachSheetClose: {
+    position: "absolute",
+    top: 14,
+    right: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#F3F4F6",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2
+  },
+  coachSheetTitle: {
+    color: palette.dark,
+    fontSize: 21,
+    fontWeight: "900",
+    paddingRight: 42
+  },
+  coachSheetSub: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  coachSheetSection: {
+    color: palette.dark,
+    fontSize: 12,
+    fontWeight: "900",
+    marginTop: 4
+  },
+  sheetAction: {
+    minHeight: 72,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12
+  },
+  sheetActionDisabled: {
+    opacity: 0.5
+  },
+  sheetIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: palette.greenSoft,
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  sheetActionTitle: {
+    color: palette.dark,
+    fontSize: 14,
+    fontWeight: "900"
+  },
+  sheetActionSub: {
+    color: palette.muted,
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+    fontWeight: "700"
+  },
+  infoSheetRow: {
+    minHeight: 76,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 16,
+    padding: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12
+  },
+  tradeContextRow: {
+    minHeight: 64,
+    borderWidth: 1,
+    borderColor: palette.border,
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    padding: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10
+  },
+  tradeContextRowActive: {
+    borderColor: palette.green,
+    backgroundColor: "#FBFFFC"
+  },
+  coachSheetButton: {
+    minHeight: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: palette.green,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 4
+  },
+  coachSheetButtonText: {
+    color: palette.green,
+    fontWeight: "900"
   }
 });

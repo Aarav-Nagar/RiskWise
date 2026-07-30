@@ -7,11 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "riskwise",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F8FBF8"
-    },
     "web": {
       "bundler": "metro",
       "output": "single",
@@ -25,7 +20,19 @@
           "cameraPermission": "RiskWise lets you photograph contract screenshots so you can confirm details before running an educational risk check."
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "@sentry/react-native",
+      "expo-web-browser",
+      "expo-font",
+      "expo-asset",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#F8FBF8"
+        }
+      ]
     ],
     "ios": {
       "supportsTablet": false,
@@ -43,7 +50,8 @@
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#092524"
-      }
+      },
+      "versionCode": 2
     },
     "extra": {
       "eas": {

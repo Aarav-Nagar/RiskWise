@@ -2,7 +2,7 @@ import React from "react";
 import { Image, Linking, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { Card } from "../components/Card";
-import { Header, money, numberOrNull, ScreenScroll, sharedText } from "../components/Shared";
+import { greeting, Header, money, numberOrNull, ScreenScroll, sharedText } from "../components/Shared";
 import { getMarketBundle, getMarketProviderStatus, searchMarketSymbols } from "../services/apiClient";
 import { palette } from "../theme/theme";
 
@@ -53,7 +53,7 @@ const generalLinks = [
 const savedFilters = ["All", "High risk", "Moderate", "Controlled"];
 
 export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], navigate, openSavedCheck }) {
-  const name = (user?.name || draft.user || "Alex").split(" ")[0];
+  const welcome = greeting(user);
   const startingStock = findStock(draft.ticker) || stockUniverse[1];
   const [query, setQuery] = React.useState(startingStock.symbol);
   const [selectedStock, setSelectedStock] = React.useState(startingStock);
@@ -168,7 +168,7 @@ export function HomeScreen({ user, draft, setDraft, report, savedChecks = [], na
 
   return (
     <ScreenScroll>
-      <Header title={`Good morning, ${name}`} subtitle="Pick a stock, review the current context, then run an options risk check." />
+      <Header title={welcome} subtitle="Pick a stock, review the current context, then run an options risk check." />
 
       <Card style={styles.selectorCard}>
         <View style={styles.selectorTop}>

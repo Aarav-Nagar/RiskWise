@@ -204,6 +204,19 @@ export function money(value) {
   return `${sign}$${Math.abs(number).toLocaleString()}`;
 }
 
+// Formats a UTC ISO8601 timestamp (e.g. delayed-data `fetched_at`) as a short client-local time.
+// Returns "" for missing/invalid input so callers can conditionally render the freshness line.
+export function formatFetchedAt(iso) {
+  if (!iso) {
+    return "";
+  }
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  return parsed.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 export function deepMerge(base, patch) {
   const result = { ...base };
   Object.entries(patch || {}).forEach(([key, value]) => {
@@ -225,6 +238,20 @@ export function numberOrNull(value) {
   }
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
+}
+
+// The signed-in account is the only source for the user's name - never a demo default.
+export function firstName(user) {
+  const full = String(user?.name || user?.fullName || "").trim();
+  return full ? full.split(/\s+/)[0] : "";
+}
+
+// Greets by the real local hour, and omits the name entirely when we do not have one.
+export function greeting(user, now = new Date()) {
+  const hour = now.getHours();
+  const part = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const name = firstName(user);
+  return name ? `${part}, ${name}` : part;
 }
 
 export function MissingDataNote({ message = NOT_AVAILABLE }) {

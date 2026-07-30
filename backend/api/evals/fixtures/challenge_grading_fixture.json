@@ -1,0 +1,59 @@
+{
+  "_warning": "LABELS ARE MODEL-DRAFTED AND NOT YET HUMAN-REVIEWED. A human must review and correct every 'label' before these rows are treated as ground truth. Set 'human_reviewed': true per row once checked.",
+  "_label_meanings": {
+    "correct": "Covers the dimension's concepts and the claims are right. Coverage ground truth: covered.",
+    "right_topic_wrong_claim": "Mentions the right concepts but the core claim is wrong. Coverage ground truth: covered (catching the wrong claim is the LLM rubric layer's job, not the embedding layer's).",
+    "wrong_but_fluent": "Fluent, confident trading language that never actually touches this dimension's concepts. Coverage ground truth: not covered.",
+    "off_topic": "Unrelated to options risk entirely. Coverage ground truth: not covered."
+  },
+  "_coverage_ground_truth_rule": "covered = label in {correct, right_topic_wrong_claim}",
+  "answers": [
+    {"id": "timing_correct_1", "dimension": "Timing", "label": "correct", "human_reviewed": false, "answer": "There are about 19 trading days left, and theta decay eats the option's value every single day, so the move has to happen before expiration or the premium bleeds away."},
+    {"id": "timing_correct_2", "dimension": "Timing", "label": "correct", "human_reviewed": false, "answer": "Time decay accelerates as expiration gets close; even if I'm right on direction, arriving late means the contract still loses money."},
+    {"id": "timing_rtwc_1", "dimension": "Timing", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "Theta decay actually works in my favor here because the longer I hold this long call, the more time value it collects toward expiration."},
+    {"id": "timing_rtwc_2", "dimension": "Timing", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "There are around 60 trading days before this expires, so time decay is basically irrelevant for a contract this short-dated."},
+    {"id": "timing_wbf_1", "dimension": "Timing", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "The chart shows a clean cup-and-handle with strong institutional accumulation, so the technical setup is primed for a breakout continuation."},
+    {"id": "timing_wbf_2", "dimension": "Timing", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "Management guided revenue up nicely last quarter and the sector rotation favors this name, so the fundamentals fully support the position."},
+    {"id": "timing_offtopic_1", "dimension": "Timing", "label": "off_topic", "human_reviewed": false, "answer": "I usually check my portfolio on weekends after coffee with friends."},
+
+    {"id": "breakeven_correct_1", "dimension": "Breakeven", "label": "correct", "human_reviewed": false, "answer": "The stock has to move past the breakeven price, which is the strike plus the premium I paid, before this call makes any money at expiry. That's roughly a 4 percent move."},
+    {"id": "breakeven_correct_2", "dimension": "Breakeven", "label": "correct", "human_reviewed": false, "answer": "Being right on direction is not enough — if the underlying rises less than the premium paid, the position still loses at expiration because it never clears breakeven."},
+    {"id": "breakeven_rtwc_1", "dimension": "Breakeven", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "The breakeven on this long call is the strike minus the premium paid, so the stock can even drop a bit and I'd still break even at expiry."},
+    {"id": "breakeven_rtwc_2", "dimension": "Breakeven", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "As long as the stock touches the breakeven price at any point before expiration, the position is guaranteed to close profitable."},
+    {"id": "breakeven_wbf_1", "dimension": "Breakeven", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "This company has a dominant moat and pricing power, and the street is underestimating next quarter's earnings beat potential."},
+    {"id": "breakeven_wbf_2", "dimension": "Breakeven", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "My conviction comes from the volume profile and the way market makers are positioned into opex, the flows are clearly bullish."},
+    {"id": "breakeven_offtopic_1", "dimension": "Breakeven", "label": "off_topic", "human_reviewed": false, "answer": "Pizza night is Thursday and I never miss it."},
+
+    {"id": "sizing_correct_1", "dimension": "Sizing", "label": "correct", "human_reviewed": false, "answer": "The max loss is the entire premium paid, about 4 percent of my account, which is above my 2 percent per-trade limit, so the size is the weakest part of this trade."},
+    {"id": "sizing_correct_2", "dimension": "Sizing", "label": "correct", "human_reviewed": false, "answer": "Position size is the one thing I fully control before entry; if this premium goes to zero the account draws down by the full amount at risk, so I size it against my account percent rule."},
+    {"id": "sizing_rtwc_1", "dimension": "Sizing", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "My max loss on this long call is only half the premium because the broker will always stop me out before the option loses more than that."},
+    {"id": "sizing_rtwc_2", "dimension": "Sizing", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "This trade risks about 0.5 percent of my account, so even though I bought ten contracts on a small account the position size rule is easily satisfied."},
+    {"id": "sizing_wbf_1", "dimension": "Sizing", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "The company just announced a buyback and insiders have been purchasing shares aggressively, which is a strong signal for the equity."},
+    {"id": "sizing_wbf_2", "dimension": "Sizing", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "Implied volatility rank is at the 30th percentile so the premium is objectively cheap relative to the past year of vol history."},
+    {"id": "sizing_offtopic_1", "dimension": "Sizing", "label": "off_topic", "human_reviewed": false, "answer": "I've been meaning to start jogging again once the weather improves."},
+
+    {"id": "volatility_correct_1", "dimension": "Volatility", "label": "correct", "human_reviewed": false, "answer": "If implied volatility drops after I enter, the option premium shrinks even if the stock goes my way — that's IV crush, and it's worst right after events like earnings."},
+    {"id": "volatility_correct_2", "dimension": "Volatility", "label": "correct", "human_reviewed": false, "answer": "Buying when IV is elevated means paying an inflated premium; my vega exposure means the position loses value as implied volatility compresses back to normal."},
+    {"id": "volatility_rtwc_1", "dimension": "Volatility", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "IV crush after earnings would actually raise my long call's premium because lower implied volatility makes options easier to price."},
+    {"id": "volatility_rtwc_2", "dimension": "Volatility", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "Since I'm long the option I have negative vega, so falling implied volatility is exactly what this position wants."},
+    {"id": "volatility_wbf_1", "dimension": "Volatility", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "The macro backdrop is supportive with rate cuts on the horizon, and this stock historically outperforms in easing cycles."},
+    {"id": "volatility_wbf_2", "dimension": "Volatility", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "The 50-day moving average just crossed the 200-day, a golden cross, which is one of the most reliable momentum signals there is."},
+    {"id": "volatility_offtopic_1", "dimension": "Volatility", "label": "off_topic", "human_reviewed": false, "answer": "My cousin recommended a great series to binge this weekend."},
+
+    {"id": "liquidity_correct_1", "dimension": "Liquidity", "label": "correct", "human_reviewed": false, "answer": "The bid-ask spread is wide, around 6 percent, so part of the position's value is lost immediately on entry and again on exit, and low open interest makes a fair fill harder."},
+    {"id": "liquidity_correct_2", "dimension": "Liquidity", "label": "correct", "human_reviewed": false, "answer": "With thin volume and low open interest, slippage becomes a hidden cost on top of the premium — I might not be able to exit anywhere near the mid price."},
+    {"id": "liquidity_rtwc_1", "dimension": "Liquidity", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "A wide bid-ask spread is fine for me because I only lose the spread if I hold the contract all the way to expiration."},
+    {"id": "liquidity_rtwc_2", "dimension": "Liquidity", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "Open interest of 50 contracts is plenty of liquidity for retail size; volume only matters for institutions moving thousands of lots."},
+    {"id": "liquidity_wbf_1", "dimension": "Liquidity", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "The stock has beaten earnings four quarters in a row and the analyst upgrades keep coming, sentiment is clearly turning."},
+    {"id": "liquidity_wbf_2", "dimension": "Liquidity", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "Delta is around 0.45 and gamma picks up near the strike, so the contract will respond well to the move I expect."},
+    {"id": "liquidity_offtopic_1", "dimension": "Liquidity", "label": "off_topic", "human_reviewed": false, "answer": "The new coffee place downtown has amazing croissants."},
+
+    {"id": "exit_correct_1", "dimension": "Exit", "label": "correct", "human_reviewed": false, "answer": "If the stock closes below 95, my thesis is invalidated and I take the loss; that specific price level is decided before entry so the exit is a rule, not an emotion."},
+    {"id": "exit_correct_2", "dimension": "Exit", "label": "correct", "human_reviewed": false, "answer": "My exit plan has two sides: take profit if the position doubles, and accept the loss if the catalyst passes without the move, because holding to expiry just lets time decay erase what's left."},
+    {"id": "exit_rtwc_1", "dimension": "Exit", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "My exit plan is to hold through expiration no matter what, because an invalidation level would just shake me out of a good trade early."},
+    {"id": "exit_rtwc_2", "dimension": "Exit", "label": "right_topic_wrong_claim", "human_reviewed": false, "answer": "I'll set my invalidation level after I'm in the trade and see how it behaves — deciding the exit before entry locks you in too early."},
+    {"id": "exit_wbf_1", "dimension": "Exit", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "This name has huge short interest and any squeeze could send it vertical, the risk-reward asymmetry is exceptional here."},
+    {"id": "exit_wbf_2", "dimension": "Exit", "label": "wrong_but_fluent", "human_reviewed": false, "answer": "The options flow scanner showed big sweeps at the ask this morning, smart money is clearly positioning for a rally."},
+    {"id": "exit_offtopic_1", "dimension": "Exit", "label": "off_topic", "human_reviewed": false, "answer": "Honestly I just need to remember to water my plants more often."}
+  ]
+}

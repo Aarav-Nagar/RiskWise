@@ -484,7 +484,6 @@ function enterApp(user) {
   setCurrentUser(user);
   setDraft((current) => ({
     ...current,
-    user: firstName(user.name),
     accountSize: user.accountSize || 25000,
     riskBudget: Math.round((Number(user.accountSize || 25000) * Number(user.riskBudgetPercent || 2)) / 100)
   }));
@@ -626,7 +625,6 @@ function PreviewApp() {
   const [activeTab, setActiveTab] = useState("Home");
   const [draft, setDraft] = useState(() => ({
     ...tradeDraft,
-    user: "Aarav",
     accountSize: 25000,
     riskBudget: 500
   }));
@@ -818,10 +816,6 @@ function createPreviewRiskWiseUser() {
     },
     syncMode: "preview"
   };
-}
-
-function firstName(name) {
-  return (name || "Alex").split(" ")[0];
 }
 
 function formatClerkError(err) {

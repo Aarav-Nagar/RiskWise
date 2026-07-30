@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import re
 from datetime import date, datetime
@@ -12,7 +14,7 @@ from .llm_provider import configured_providers, generate_answer
 SAFETY_LINE = "Educational only. Not financial advice."
 ATTACHMENT_NUMBER_RE = r"[+-]?[0-9]+(?:\.[0-9]+)?"
 ATTACHMENT_MONTH_RE = r"(?:JAN(?:UARY)?|FEB(?:RUARY)?|MAR(?:CH)?|APR(?:IL)?|MAY|JUN(?:E)?|JUL(?:Y)?|AUG(?:UST)?|SEP(?:TEMBER)?|SEPT|OCT(?:OBER)?|NOV(?:EMBER)?|DEC(?:EMBER)?)\.?"
-ATTACHMENT_DATE_RE = rf"(?:\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?|{ATTACHMENT_MONTH_RE}\s+\d{{1,2}},?\s*(?:\d{{2,4}})?)"
+ATTACHMENT_DATE_RE = rf"(?:\d{{1,2}}[/-]\d{{1,2}}(?:[/-]\d{{2,4}})?|{ATTACHMENT_MONTH_RE}\s+\d{{1,2}},?\s*(?:\d{{2,4}})?|\d{{1,2}}\s*{ATTACHMENT_MONTH_RE}\s*(?:\d{{2,4}})?)"
 
 SYSTEM_PROMPT = """
 You are RiskWiseAI, a calm options-risk coach for students and self-directed learners.
@@ -2149,6 +2151,9 @@ def attachment_contract_context(attachments: list[dict[str, Any]]) -> dict[str, 
 
 
 def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    structured = extract_structured_contract_row(attachments)
+    if structured:
+        return structured
     text = " ".join(str(item.get("text") or "") for item in attachments)
     upper = text.upper()
     if not upper.strip():
@@ -2195,8 +2200,147 @@ def extract_attachment_contract(attachments: list[dict[str, Any]]) -> dict[str, 
     }
 
 
+def extract_structured_contract_row(attachments: list[dict[str, Any]]) -> dict[str, Any]:
+    best_contract: dict[str, Any] = {}
+    best_score = 0
+    for item in attachments:
+        text = str(item.get("text") or "")
+        if not text.strip() or not any(delimiter in text for delimiter in [",", "\t"]):
+            continue
+        for row in iter_attachment_table_rows(text):
+            contract = contract_from_table_row(row)
+            extracted = normalize_extracted_contract(contract)
+            if not is_extraction_useful(extracted):
+                continue
+            score = extracted_contract_score(extracted)
+            if score > best_score:
+                best_contract = contract
+                best_score = score
+    return best_contract
+
+
+def extracted_contract_score(extracted: dict[str, Any]) -> int:
+    required = ["ticker", "optionSide", "strike", "expiration", "premium", "contracts"]
+    live = ["bid", "ask", "impliedVolatility", "openInterest", "contractVolume", "underlyingPrice"]
+    return sum(2 for field in required if extracted.get(field)) + sum(1 for field in live if extracted.get(field))
+
+
+def iter_attachment_table_rows(text: str) -> list[dict[str, str]]:
+    sample = text[:2048]
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t")
+    except csv.Error:
+        dialect = csv.excel
+    candidates = [text]
+    header_index = find_attachment_table_header_index(text, dialect)
+    if header_index > 0:
+        candidates.append("\n".join(text.splitlines()[header_index:]))
+
+    rows: list[dict[str, str]] = []
+    for candidate in candidates:
+        rows.extend(read_attachment_table_rows(candidate, dialect))
+    return rows
+
+
+def read_attachment_table_rows(text: str, dialect: csv.Dialect) -> list[dict[str, str]]:
+    try:
+        reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+        return [{str(key or "").strip(): str(value or "").strip() for key, value in row.items()} for row in reader if row]
+    except csv.Error:
+        return []
+
+
+def find_attachment_table_header_index(text: str, dialect: csv.Dialect) -> int:
+    descriptor_headers = {
+        "description",
+        "contract",
+        "option",
+        "security",
+        "instrument",
+        "ticker",
+        "symbol",
+        "underlying",
+        "root",
+    }
+    value_headers = {
+        "qty",
+        "quantity",
+        "contracts",
+        "strike",
+        "strikeprice",
+        "expiration",
+        "expirationdate",
+        "expiry",
+        "exp",
+        "mark",
+        "mid",
+        "premium",
+        "debit",
+        "cost",
+        "price",
+        "bid",
+        "ask",
+    }
+    for index, line in enumerate(text.splitlines()):
+        if not line.strip():
+            continue
+        try:
+            cells = next(csv.reader([line], dialect=dialect))
+        except csv.Error:
+            cells = re.split(r"[\t,]", line)
+        headers = {normalize_table_header(cell) for cell in cells}
+        if headers & descriptor_headers and headers & value_headers:
+            return index
+    return 0
+
+
+def contract_from_table_row(row: dict[str, str]) -> dict[str, Any]:
+    description = row_value(row, ["description", "contract", "option", "security", "instrument"])
+    combined = " ".join(value for value in row.values() if value)
+    parsed = parse_contract_shorthand(description or combined)
+    if not parsed:
+        parsed = {}
+
+    side = parsed.get("side") or row_value(row, ["side", "type", "putcall", "callput", "optiontype"])
+    if side:
+        side = "Call" if str(side).strip().upper().startswith("C") else "Put" if str(side).strip().upper().startswith("P") else side
+
+    return {
+        "ticker": parsed.get("ticker") or row_value(row, ["ticker", "symbol", "underlying", "root"]),
+        "side": side,
+        "strike": parsed.get("strike") or row_number(row, ["strike", "strikeprice", "strike_price"]),
+        "premium": parsed.get("premium") or row_number(row, ["premium", "mark", "mid", "debit", "cost", "price"]),
+        "bid": parsed.get("bid") or row_number(row, ["bid"]),
+        "ask": parsed.get("ask") or row_number(row, ["ask"]),
+        "impliedVolatility": parsed.get("impliedVolatility") or row_number(row, ["iv", "impliedvolatility", "implied_volatility"]),
+        "openInterest": parsed.get("openInterest") or row_number(row, ["oi", "openinterest", "open_interest"]),
+        "contractVolume": parsed.get("contractVolume") or row_number(row, ["vol", "volume", "contractvolume", "contract_volume"]),
+        "underlyingPrice": parsed.get("underlyingPrice") or row_number(row, ["underlyingprice", "underlying_price", "stockprice", "stock_price"]),
+        "contracts": parsed.get("contracts") or row_number(row, ["qty", "quantity", "contracts"]),
+        "expiration": parsed.get("expiration")
+        or normalize_shorthand_expiration(row_value(row, ["expiration", "expirationdate", "expiration_date", "expiry", "exp"])),
+    }
+
+
+def row_value(row: dict[str, str], aliases: list[str]) -> str | None:
+    normalized_aliases = {normalize_table_header(alias) for alias in aliases}
+    for key, value in row.items():
+        if normalize_table_header(key) in normalized_aliases and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def row_number(row: dict[str, str], aliases: list[str]) -> float | None:
+    value = row_value(row, aliases)
+    return attachment_number_from_value(value) if value is not None else None
+
+
+def normalize_table_header(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
 def parse_contract_shorthand(text: str) -> dict[str, Any]:
-    compact = re.search(r"\b([A-Z]{1,5})(\d{2})(\d{2})(\d{2})([CP])(\d{8})\b", text.upper())
+    compact = re.search(r"\b([A-Z]{1,6})\s*(\d{2})(\d{2})(\d{2})([CP])(\d{8})\b", text.upper())
     if compact:
         strike = int(compact.group(6)) / 1000
         return {
@@ -2213,18 +2357,39 @@ def parse_contract_shorthand(text: str) -> dict[str, Any]:
             "contracts": parse_attachment_number(text, ["qty", "quantity", "contracts"]) or parse_contract_quantity(text),
             "expiration": normalize_shorthand_expiration(f"20{compact.group(2)}-{compact.group(3)}-{compact.group(4)}"),
         }
+    platform_symbol = re.search(
+        r"(?<![A-Z0-9])\.?([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{1,5}(?:\.\d{1,3})?)\b",
+        text.upper(),
+    )
+    if platform_symbol:
+        return {
+            "ticker": platform_symbol.group(1),
+            "side": "Call" if platform_symbol.group(5) == "C" else "Put",
+            "strike": attachment_number_from_value(platform_symbol.group(6)),
+            "premium": parse_shorthand_premium(text),
+            "bid": parse_attachment_number(text, ["bid"]),
+            "ask": parse_attachment_number(text, ["ask"]),
+            "impliedVolatility": parse_attachment_number(text, ["iv", "implied volatility"]),
+            "openInterest": parse_attachment_number(text, ["oi", "open interest"]),
+            "contractVolume": parse_attachment_number(text, ["vol", "volume"]),
+            "underlyingPrice": parse_attachment_number(text, ["underlying", "stock price"]),
+            "contracts": parse_attachment_number(text, ["qty", "quantity", "contracts"]) or parse_contract_quantity(text),
+            "expiration": normalize_shorthand_expiration(
+                f"20{platform_symbol.group(2)}-{platform_symbol.group(3)}-{platform_symbol.group(4)}"
+            ),
+        }
     patterns = [
-        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b",
-        rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b",
-        rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s+(CALL|PUT)\s+({ATTACHMENT_DATE_RE})\b",
+        (rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s*([CP])\s+({ATTACHMENT_DATE_RE})\b", False),
+        (rf"\b([A-Z]{{1,5}})\s+({ATTACHMENT_DATE_RE})\s+\$?({ATTACHMENT_NUMBER_RE})\s*(CALL|PUT|[CP])\b", True),
+        (rf"\b([A-Z]{{1,5}})\s+\$?({ATTACHMENT_NUMBER_RE})\s+(CALL|PUT)\s+({ATTACHMENT_DATE_RE})\b", False),
     ]
-    for pattern in patterns:
+    for pattern, date_first in patterns:
         match = re.search(pattern, text.upper())
         if not match:
             continue
         groups = match.groups()
         ticker = groups[0]
-        if "/" in groups[1] or "-" in groups[1]:
+        if date_first:
             expiration = groups[1]
             strike = groups[2]
             side_raw = groups[3]
@@ -2279,12 +2444,18 @@ def normalize_shorthand_expiration(value: str) -> str:
 
     month_match = re.match(rf"({ATTACHMENT_MONTH_RE})\s+(\d{{1,2}}),?\s*(\d{{2,4}})?$", text, re.IGNORECASE)
     if not month_match:
-        return text
-    month = parse_month_number(month_match.group(1))
+        day_month_match = re.match(rf"(\d{{1,2}})\s*({ATTACHMENT_MONTH_RE})\s*(\d{{2,4}})?$", text, re.IGNORECASE)
+        if not day_month_match:
+            return text
+        day = int(day_month_match.group(1))
+        month = parse_month_number(day_month_match.group(2))
+        raw_year = day_month_match.group(3)
+    else:
+        month = parse_month_number(month_match.group(1))
+        day = int(month_match.group(2))
+        raw_year = month_match.group(3)
     if not month:
         return text
-    day = int(month_match.group(2))
-    raw_year = month_match.group(3)
     year = int(raw_year) if raw_year else date.today().year
     if year < 100:
         year += 2000
@@ -2400,10 +2571,10 @@ def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
         return {}
     side = data.get("side") or data.get("optionSide") or data.get("option_side")
     normalized_side = str(side).strip().lower() if side else ""
-    if "call" in normalized_side:
+    if normalized_side in {"c", "call", "calls"}:
         option_side = "call"
         trade_type = "Call Option (Long)"
-    elif "put" in normalized_side:
+    elif normalized_side in {"p", "put", "puts"}:
         option_side = "put"
         trade_type = "Put Option (Long)"
     else:
@@ -2413,16 +2584,24 @@ def normalize_extracted_contract(data: dict[str, Any]) -> dict[str, Any]:
         "ticker": clean_extracted_ticker(data.get("ticker") or data.get("symbol") or data.get("underlying")),
         "optionSide": option_side or None,
         "tradeType": trade_type or None,
-        "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice")),
+        "strike": normalize_optional_number(data.get("strike") or data.get("strikePrice"), minimum=0, allow_zero=False),
         "expiration": normalize_extracted_expiration(data.get("expiration") or data.get("expirationDate")),
-        "premium": normalize_optional_number(data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost")),
-        "bid": normalize_optional_number(data.get("bid")),
-        "ask": normalize_optional_number(data.get("ask")),
-        "impliedVolatility": normalize_optional_number(data.get("impliedVolatility") or data.get("iv")),
-        "openInterest": normalize_optional_number(data.get("openInterest") or data.get("oi")),
-        "contractVolume": normalize_optional_number(data.get("contractVolume") or data.get("volume")),
-        "underlyingPrice": normalize_optional_number(data.get("underlyingPrice") or data.get("stockPrice")),
-        "contracts": normalize_optional_number(data.get("contracts") or data.get("quantity")),
+        "premium": normalize_optional_number(
+            data.get("premium") or data.get("mid") or data.get("debit") or data.get("cost"),
+            minimum=0,
+            allow_zero=False,
+        ),
+        "bid": normalize_optional_number(data.get("bid"), minimum=0),
+        "ask": normalize_optional_number(data.get("ask"), minimum=0),
+        "impliedVolatility": normalize_optional_number(data.get("impliedVolatility") or data.get("iv"), minimum=0),
+        "openInterest": normalize_optional_number(data.get("openInterest") or data.get("oi"), minimum=0),
+        "contractVolume": normalize_optional_number(data.get("contractVolume") or data.get("volume"), minimum=0),
+        "underlyingPrice": normalize_optional_number(
+            data.get("underlyingPrice") or data.get("stockPrice"),
+            minimum=0,
+            allow_zero=False,
+        ),
+        "contracts": normalize_optional_number(data.get("contracts") or data.get("quantity"), minimum=1),
     }
 
 
@@ -2433,9 +2612,11 @@ def clean_extracted_ticker(value: Any) -> str | None:
     return ticker[:8]
 
 
-def normalize_optional_number(value: Any) -> str | None:
+def normalize_optional_number(value: Any, *, minimum: float | None = None, allow_zero: bool = True) -> str | None:
     number = attachment_number_from_value(value)
     if number is None:
+        return None
+    if minimum is not None and (number < minimum or (number == 0 and not allow_zero)):
         return None
     if number.is_integer():
         return str(int(number))

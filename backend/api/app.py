@@ -12,6 +12,12 @@ if settings.sentry_dsn:
     sentry_sdk.init(dsn=settings.sentry_dsn, environment=settings.environment, traces_sample_rate=0.05)
 
 from .models import (
+    AlternativesRequest,
+    AlternativesResponse,
+    ChallengeGradeRequest,
+    ChallengeGradeResponse,
+    ChallengeStartRequest,
+    ChallengeStartResponse,
     ChatRequest,
     ChatFeedbackRequest,
     ChatFeedbackResponse,
@@ -43,6 +49,9 @@ from .models import (
     UserResponse,
 )
 from .scoring import parse_expiration_date, score_trade_check
+from .services.alternatives import build_alternatives
+from .services.alternatives.market_context import gather_market_contracts
+from .services.challenge import build_challenge_session, grade_challenge
 from .services.llm import answer_chat, extract_contract_from_uploads
 from .services.check_export import build_saved_check_export
 from .services.llm_provider import configured_providers
@@ -335,7 +344,13 @@ def saved_checks(user_id: str, http_request: Request) -> list[SavedCheckResponse
 @app.post("/saved-checks", response_model=SavedCheckResponse)
 def save_check(request: SavedCheckRequest, http_request: Request) -> SavedCheckResponse:
     require_request_user(request.user_id, http_request)
-    item = store.save_check(request.user_id, request.trade_check_id, request.report, request.note)
+    item = store.save_check(
+        request.user_id,
+        request.trade_check_id,
+        request.report,
+        request.note,
+        prediction_lock=request.prediction_lock.model_dump() if request.prediction_lock else None,
+    )
     return SavedCheckResponse(**item)
 
 
@@ -347,6 +362,46 @@ def export_saved_check(user_id: str, saved_check_id: str, http_request: Request)
         raise HTTPException(status_code=404, detail="That saved Check was not found.")
     export = build_saved_check_export(item, store.get_user(user_id) or {})
     return SavedCheckExportResponse(**export)
+
+
+@app.post("/alternatives", response_model=AlternativesResponse)
+async def alternatives(request: AlternativesRequest, http_request: Request) -> AlternativesResponse:
+    require_request_user(request.user_id, http_request)
+    stored_profile = store.get_user(request.user_id) or {}
+    profile_context = merge_profile_context(stored_profile, request.user_profile or {})
+    contracts = request.market_contracts or await gather_market_contracts(request.report)
+    result = build_alternatives(report=request.report, user_profile=profile_context, market_contracts=contracts)
+    return AlternativesResponse(**result)
+
+
+@app.post("/challenge/start", response_model=ChallengeStartResponse)
+def challenge_start(request: ChallengeStartRequest, http_request: Request) -> ChallengeStartResponse:
+    require_request_user(request.user_id, http_request)
+    stored_profile = store.get_user(request.user_id) or {}
+    profile_context = merge_profile_context(stored_profile, request.user_profile or {})
+    result = build_challenge_session(
+        report=request.report,
+        user_profile=profile_context,
+        conviction_pct=request.conviction_pct,
+        direction=request.direction,
+        thesis_text=request.thesis_text,
+    )
+    return ChallengeStartResponse(**result)
+
+
+@app.post("/challenge/grade", response_model=ChallengeGradeResponse)
+async def challenge_grade(request: ChallengeGradeRequest, http_request: Request) -> ChallengeGradeResponse:
+    require_request_user(request.user_id, http_request)
+    stored_profile = store.get_user(request.user_id) or {}
+    profile_context = merge_profile_context(stored_profile, request.user_profile or {})
+    result = await grade_challenge(
+        session=request.session,
+        answers=[item.model_dump() for item in request.answers],
+        report=request.report,
+        user_profile=profile_context,
+        prediction_lock=request.prediction_lock.model_dump() if request.prediction_lock else None,
+    )
+    return ChallengeGradeResponse(**result)
 
 
 @app.post("/chat", response_model=ChatResponse)

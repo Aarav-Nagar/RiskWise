@@ -673,6 +673,60 @@ def test_contract_parser_handles_dollar_strike_month_date_and_signed_quantity() 
     assert fields["contractVolume"] == "456"
 
 
+def test_contract_parser_handles_date_first_broker_rows_with_day_month_expiration() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "statement-row.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL 15 JAN 27 200 CALL Mark 2.15 Qty 1 Bid 2.10 Ask 2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2027-01-15"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "expiration" not in response["missing_fields"]
+
+
+def test_contract_parser_handles_compact_broker_month_code_rows() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "ibkr-position.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL 21AUG26 200 C @ 2.15 Qty 1 Bid 2.10 Ask 2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "expiration" not in response["missing_fields"]
+
+
 def test_contract_parser_handles_ocr_row_with_strike_before_side_and_mark_price() -> None:
     response = asyncio.run(
         extract_contract_from_uploads(
@@ -746,6 +800,123 @@ def test_contract_parser_handles_occ_symbol_and_partial_ocr() -> None:
     assert "ask" in response["missing_live_fields"]
 
 
+def test_contract_parser_handles_spaced_occ_symbol_from_broker_export() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "occ-export.txt",
+                    "type": "text/plain",
+                    "source": "files",
+                    "text": "AAPL 260821C00200000 @ 2.15 Qty 1 Bid 2.10 Ask 2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "strike" not in response["missing_fields"]
+    assert "expiration" not in response["missing_fields"]
+    assert "impliedVolatility" in response["missing_live_fields"]
+
+
+def test_contract_parser_preserves_broker_csv_row_mark_and_quantity() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "positions.csv",
+                    "type": "text/csv",
+                    "source": "files",
+                    "text": "Description,Qty,Mark,Bid,Ask\nAAPL 08/21/2026 200.00 C,+1,2.15,2.10,2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "premium" not in response["missing_fields"]
+    assert "contracts" not in response["missing_fields"]
+
+
+def test_contract_parser_skips_broker_csv_preamble_before_header() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "positions-with-preamble.csv",
+                    "type": "text/csv",
+                    "source": "files",
+                    "text": (
+                        "Account Positions Export\n"
+                        "Generated,2026-07-27\n"
+                        "\n"
+                        "Description,Qty,Mark,Bid,Ask\n"
+                        "AAPL 08/21/2026 200.00 C,+1,2.15,2.10,2.25"
+                    ),
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+
+
+def test_contract_parser_handles_thinkorswim_platform_symbol() -> None:
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "tos-positions.csv",
+                    "type": "text/csv",
+                    "source": "files",
+                    "text": "Description,Qty,Mark,Bid,Ask\n.AAPL260821C200,+1,2.15,2.10,2.25",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["ticker"] == "AAPL"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "200"
+    assert fields["expiration"] == "2026-08-21"
+    assert fields["premium"] == "2.15"
+    assert fields["contracts"] == "1"
+    assert fields["bid"] == "2.1"
+    assert fields["ask"] == "2.25"
+    assert "ticker" not in response["missing_fields"]
+    assert "strike" not in response["missing_fields"]
+
+
 def test_image_upload_without_vision_provider_goes_to_manual_review() -> None:
     previous_order = settings.llm_provider_order
     settings.llm_provider_order = ["fallback"]
@@ -801,6 +972,44 @@ def test_image_upload_with_hosted_vision_result_returns_confirmable_fields(monke
     assert response["model"] == "gemini-vision-test"
     assert response["fields"]["ticker"] == "AAPL"
     assert response["fields"]["premium"] == "2.15"
+    assert "bid" in response["missing_live_fields"]
+
+
+def test_vision_extraction_accepts_side_aliases_but_drops_invalid_numbers(monkeypatch) -> None:
+    from api.services import llm as llm_service
+    from api.services.llm_provider import LLMResult
+
+    async def fake_generate_answer(**kwargs):
+        return LLMResult(
+            text='{"ticker":"MSFT","side":"C","strike":430,"expiration":"2099-01-17","premium":-5.20,"contracts":0,"bid":-1,"ask":5.4}',
+            provider="gemini",
+            model="gemini-vision-test",
+        )
+
+    monkeypatch.setattr(llm_service, "generate_answer", fake_generate_answer)
+    response = asyncio.run(
+        extract_contract_from_uploads(
+            [
+                {
+                    "name": "broker-screenshot.png",
+                    "type": "image/png",
+                    "source": "photo-library",
+                    "dataUrl": "data:image/png;base64,iVBORw0KGgo=",
+                }
+            ]
+        )
+    )
+    fields = response["fields"]
+
+    assert response["status"] == "ok"
+    assert fields["optionSide"] == "call"
+    assert fields["strike"] == "430"
+    assert fields["ask"] == "5.4"
+    assert "premium" not in fields
+    assert "contracts" not in fields
+    assert "bid" not in fields
+    assert "premium" in response["missing_fields"]
+    assert "contracts" in response["missing_fields"]
     assert "bid" in response["missing_live_fields"]
 
 

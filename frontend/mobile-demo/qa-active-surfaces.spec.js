@@ -12,7 +12,7 @@ test("active app surfaces render without blank states or generic error cards", a
 
   await installBackendMocks(page);
   await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
-  await expect(page.getByText(/Good morning/)).toBeVisible();
+  await expect(page.getByText(/Good (morning|afternoon|evening), Aarav/)).toBeVisible();
   await expect(page.getByText("Market snapshot")).toBeVisible();
   await expect(page.getByText("Options readiness")).toBeVisible();
   await expect(page.getByText(/needs option-chain proof|options context attached/)).toBeVisible();
@@ -53,7 +53,7 @@ test("home market snapshot stacks cleanly on very small phones", async ({ page }
 
   await installBackendMocks(page);
   await page.goto(PREVIEW_PATH, { waitUntil: "domcontentloaded" });
-  await expect(page.getByText(/Good morning/)).toBeVisible();
+  await expect(page.getByText(/Good (morning|afternoon|evening), Aarav/)).toBeVisible();
   await expect(page.getByText("Market snapshot")).toBeVisible();
 
   const dayRangeBox = await page.getByText("Day range", { exact: true }).boundingBox();
