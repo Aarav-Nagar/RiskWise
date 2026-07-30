@@ -71,6 +71,11 @@ class Settings:
     rate_limit_chat = int(os.getenv("RATE_LIMIT_CHAT", "45"))
     rate_limit_trade_check = int(os.getenv("RATE_LIMIT_TRADE_CHECK", "90"))
     rate_limit_market = int(os.getenv("RATE_LIMIT_MARKET", "180"))
+    # /ai/smoke is unauthenticated by design - it has to stay usable as a deploy
+    # check - but every call runs four LLM prompts, one of them deep_analysis.
+    # Left unlimited it is a free way for anyone to drain the provider quota, so
+    # it gets a far tighter budget than the user-facing endpoints.
+    rate_limit_ai_smoke = int(os.getenv("RATE_LIMIT_AI_SMOKE", "5"))
     market_cache_seconds = int(os.getenv("MARKET_CACHE_SECONDS", "300"))
     options_cache_seconds = int(os.getenv("OPTIONS_CACHE_SECONDS", "300"))
     options_negative_cache_seconds = int(os.getenv("OPTIONS_NEGATIVE_CACHE_SECONDS", "60"))
