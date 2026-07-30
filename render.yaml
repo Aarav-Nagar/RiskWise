@@ -15,6 +15,10 @@ services:
         value: finance_app
       - key: LLM_PROVIDER_ORDER
         value: gemini,openai,fallback
+      # Set this in the Render dashboard. Without it the coach silently serves
+      # deterministic answers, because gemini/openai are skipped when unkeyed.
+      - key: GEMINI_API_KEY
+        sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: GEMINI_API_VERSION

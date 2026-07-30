@@ -18,6 +18,10 @@ PROVIDER_FAILURES: dict[str, float] = {}
 PROVIDER_DIAGNOSTICS: dict[str, dict[str, Any]] = {}
 
 
+class GeminiEmptyResponse(RuntimeError):
+    """Gemini answered with no usable text (blocked, or out of output budget)."""
+
+
 @dataclass
 class LLMResult:
     text: str
@@ -204,12 +208,17 @@ async def call_gemini(system_prompt: str, prompt: str, attachments: list[dict[st
             mime_type, image_data = parsed
             parts.append({"inline_data": {"mime_type": mime_type, "data": image_data}})
 
+    generation_config: dict[str, Any] = {
+        "temperature": settings.llm_temperature,
+        "maxOutputTokens": settings.llm_max_output_tokens,
+    }
+    thinking_config = gemini_thinking_config(settings.gemini_model, settings.gemini_thinking_budget)
+    if thinking_config is not None:
+        generation_config["thinkingConfig"] = thinking_config
+
     body = {
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {
-            "temperature": settings.llm_temperature,
-            "maxOutputTokens": settings.llm_max_output_tokens,
-        },
+        "generationConfig": generation_config,
     }
     async with httpx.AsyncClient(timeout=settings.llm_request_timeout_seconds) as client:
         response = await client.post(endpoint, params={"key": settings.gemini_api_key}, json=body)
@@ -217,7 +226,13 @@ async def call_gemini(system_prompt: str, prompt: str, attachments: list[dict[st
         data = response.json()
 
     text = extract_gemini_text(data)
-    return LLMResult(text=text, provider="gemini", model=settings.gemini_model) if text else None
+    if not text:
+        # Returning None here would fall through to the next provider with no
+        # trace of why, which is how a wired-up Gemini can look "configured"
+        # while every answer is silently deterministic. Raise so the provider
+        # diagnostics record the reason.
+        raise GeminiEmptyResponse(describe_gemini_empty(data))
+    return LLMResult(text=text, provider="gemini", model=settings.gemini_model)
 
 
 async def call_ollama(system_prompt: str, prompt: str) -> LLMResult | None:
@@ -298,6 +313,33 @@ def parse_image_data_url(data_url: str | None) -> tuple[str, str] | None:
     except Exception:
         return None
     return match.group("mime"), image_data
+
+
+def gemini_thinking_config(model: str, budget: int) -> dict[str, Any] | None:
+    """Thinking budget to send, or None to let Gemini decide."""
+    if budget < 0:
+        return None
+    # Only the 2.5 flash family reliably accepts a zero budget; sending one to a
+    # model that requires thinking is a 400, which is worse than leaving it out.
+    if budget == 0 and "2.5-flash" not in model:
+        return None
+    return {"thinkingBudget": budget}
+
+
+def describe_gemini_empty(payload: dict[str, Any]) -> str:
+    candidates = payload.get("candidates") or []
+    finish_reason = str((candidates[0] or {}).get("finishReason") or "") if candidates else ""
+    block_reason = str((payload.get("promptFeedback") or {}).get("blockReason") or "")
+    if finish_reason == "MAX_TOKENS":
+        return (
+            "Gemini returned no text: the output budget was consumed before an answer was written. "
+            "Raise LLM_MAX_OUTPUT_TOKENS or lower GEMINI_THINKING_BUDGET."
+        )
+    if block_reason:
+        return f"Gemini blocked the prompt (blockReason={block_reason})."
+    if finish_reason:
+        return f"Gemini returned no text (finishReason={finish_reason})."
+    return "Gemini returned no text and gave no finish reason."
 
 
 def extract_gemini_text(payload: dict[str, Any]) -> str:
