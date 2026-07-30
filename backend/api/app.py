@@ -72,6 +72,8 @@ _rate_limits = {
     "/chat": lambda: settings.rate_limit_chat,
     "/trade-check": lambda: settings.rate_limit_trade_check,
     "/market": lambda: settings.rate_limit_market,
+    # Unauthenticated and four LLM calls deep - see settings.rate_limit_ai_smoke.
+    "/ai/smoke": lambda: settings.rate_limit_ai_smoke,
 }
 
 app.add_middleware(
