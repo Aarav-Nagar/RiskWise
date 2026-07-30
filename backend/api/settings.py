@@ -38,6 +38,11 @@ class Settings:
     gemini_api_key = os.getenv("GEMINI_API_KEY", "")
     gemini_model = os.getenv("GEMINI_MODEL", "") or "gemini-2.5-flash"
     gemini_api_version = os.getenv("GEMINI_API_VERSION", "v1beta")
+    # Gemini 2.5 spends output tokens on internal thinking before it writes an
+    # answer, so llm_max_output_tokens can be consumed entirely by thinking and
+    # come back with no text. RiskWise reasons deterministically anyway, so
+    # thinking is off by default. -1 defers to Gemini; a positive value caps it.
+    gemini_thinking_budget = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
     ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
     ollama_model = os.getenv("OLLAMA_MODEL", "") or "qwen2.5:7b-instruct"
     llm_request_timeout_seconds = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "30.0"))
