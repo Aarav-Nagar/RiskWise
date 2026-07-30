@@ -32,7 +32,8 @@
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://riskwise-api.onrender.com",
         "EXPO_PUBLIC_APP_ENV": "testflight",
-        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_Zml0LWZlbGluZS0yOC5jbGVyay5hY2NvdW50cy5kZXYk"
+        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_Zml0LWZlbGluZS0yOC5jbGVyay5hY2NvdW50cy5kZXYk",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       },
       "ios": {
         "simulator": false
@@ -44,7 +45,8 @@
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://riskwise-api.onrender.com",
         "EXPO_PUBLIC_APP_ENV": "production",
-        "RISKWISE_REQUIRE_PRODUCTION_CLERK": "true"
+        "RISKWISE_REQUIRE_PRODUCTION_CLERK": "true",
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       },
       "ios": {
         "simulator": false
