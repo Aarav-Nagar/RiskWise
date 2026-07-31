@@ -1,10 +1,12 @@
+import asyncio
+import json
 import time
 import uuid
 
 import sentry_sdk
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .settings import settings
 
@@ -438,6 +440,74 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         attachments=request.attachments,
     )
     return ChatResponse(thread_id=thread_id, **coach)
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+
+def _chunk_words(text: str, size: int = 3):
+    words = text.split(" ")
+    for i in range(0, len(words), size):
+        yield (" " if i else "") + " ".join(words[i : i + size])
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest, http_request: Request) -> StreamingResponse:
+    """Server-Sent-Events variant of /chat for a progressive "typing" reveal.
+
+    Deliberately POST-validation streaming: the full answer is computed (LLM + the rejection guards,
+    exactly as /chat does) BEFORE any token is streamed, and only the final, guard-approved text is
+    revealed chunk by chunk. Streaming raw model tokens would let a fabricated number flash on screen
+    before a guard could reject it, so the deterministic risk math stays authoritative and unquotable
+    prose is never shown. First-token latency is unchanged; the reveal is what streams.
+    """
+    require_request_user(request.user_id, http_request)
+    history = []
+    if request.thread_id:
+        history = store.list_chat_messages(request.user_id, request.thread_id)[-10:]
+    stored_profile = store.get_user(request.user_id) or {}
+    profile_context = merge_profile_context(stored_profile, request.user_profile or {})
+    recent_checks = ranked_saved_checks(
+        store.list_saved_checks(request.user_id),
+        request.message,
+        request.current_report,
+    )
+    coach = await answer_chat(
+        request.message,
+        current_report=request.current_report,
+        user_profile=profile_context,
+        chat_mode=request.chat_mode,
+        analysis_depth=request.analysis_depth,
+        attachments=request.attachments,
+        conversation_history=history,
+        recent_checks=recent_checks,
+    )
+    # Persist before streaming so a mid-stream disconnect can't lose the turn.
+    thread_id = store.append_chat(
+        request.user_id,
+        request.thread_id,
+        request.message,
+        coach["answer"],
+        mode=request.chat_mode,
+        attachments=request.attachments,
+    )
+    answer = coach["answer"]
+    meta = {k: v for k, v in coach.items() if k != "answer"}
+    meta["thread_id"] = thread_id
+
+    async def event_stream():
+        yield _sse("meta", meta)
+        for chunk in _chunk_words(answer):
+            yield _sse("delta", {"text": chunk})
+            await asyncio.sleep(0.02)  # gentle typewriter pacing; the client may render faster
+        yield _sse("done", {"thread_id": thread_id})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/extract-contract", response_model=ContractExtractionResponse)
